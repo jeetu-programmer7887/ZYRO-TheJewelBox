@@ -1,0 +1,455 @@
+@import url('https://fonts.googleapis.com/css2?family=Almendra:ital,wght@0,400;0,700;1,400;1,700&family=Amarante&family=Cinzel+Decorative:wght@400;700;900&family=Dancing+Script:wght@400..700&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400..700;1,400..700&family=Merriweather:ital,opsz,wght@0,18..144,300..900;1,18..144,300..900&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Parisienne&family=Satisfy&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500&display=swap');
+@import "tailwindcss";
+@import 'animate.css';
+
+
+
+.zyro-card-font {
+  font-family: 'Jost', sans-serif;
+}
+
+.result-card {
+  animation: fadeSlideUp 0.5s ease forwards;
+  opacity: 0;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pulse-dot::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c9a96e;
+  margin-left: 6px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+
+
+:root {  
+  --navbar-white: rgba(255, 255, 255, 0.8);
+  --color-green: #2e4a3e;
+  --color-lightgreen: #f9faf9;
+  --color-black: black;
+  --color-white: white;
+  --color-lightgray: #e9e9e9;
+  --color-gray: #7e8180;
+  --color-gold: #c6a664;
+  --color-darkgold: #b0955e;
+  --color-rosegold: #b76e79;
+  --color-slateGray: #374151;
+  --color-lightPink: #fff8f1;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Font styles  */
+.other {
+  font-family: "Libre Baskerville", serif;
+  font-optical-sizing: auto;
+  font-weight: 300;
+  font-style: regular;
+}
+.para {
+  font-family: "Lora", serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+.para2 {
+  font-family: "Merriweather", serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+  font-variation-settings: "wdth" 100;
+}
+.title {
+  font-family: "Montserrat", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+.italic{
+  font-family: "Dancing Script", cursive;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+.font-cinzel{
+  font-family: "Cinzel Decorative", serif;
+  font-weight: 400;
+  font-style: normal;
+}
+.font-cg {
+  font-family: 'Cormorant Garamond', serif;
+}
+
+.other_pages {
+  padding-top: 100px;
+}
+
+.categories {
+  position: relative;
+  cursor: pointer;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slideDown {
+  animation: slideDown 2s ease-out forwards;
+}
+
+.tooltip::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color:  transparent transparent black transparent;
+}
+
+.categories::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  width: 0;
+  background-color: var(--color-gray);
+  transition: width 0.4s cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+.categories:hover::after {
+  width: 70%;
+}
+
+.cat_dropdown {
+  display: block;
+  border-radius: 0 0 3px 3px;
+  transform: translate3d(0, 15px, 0);
+  transition: all 0.5s ease-in-out;
+  visibility: hidden;
+}
+
+.categories:hover .cat_dropdown {
+  transform: translateY(0);
+  visibility: visible;
+}
+.account_box {
+  transform: translate3d(0, 15px, 0);
+}
+
+.account:hover .account_box {
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.categories > a::after {
+  border-bottom: 1px solid rgba(226, 226, 226, 0.3);
+  border-right: 1px solid rgba(226, 226, 226, 0.3);
+  content: "";
+  display: block;
+  height: 5px;
+  width: 5px;
+  margin-top: -4px;
+  pointer-events: none;
+  position: absolute;
+  right: 1.8rem;
+  top: 21px;
+  transform-origin: 66% 66%;
+  transform: rotate(45deg);
+  transition: all 0.3s ease-in-out;
+}
+
+.down-arrow {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.7);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+  transform: rotate(45deg);
+  transition: transform 0.3s ease, border-color 0.3s ease;
+  position: relative;
+  top: -2px;
+}
+
+.down-arrow-white {
+  border-color: rgba(255, 255, 255);
+}
+
+.down-arrow-black {
+  border-color: rgb(0, 0, 0);
+}
+
+.categories:hover .down-arrow {
+  transform: rotate(225deg);
+}
+
+.dropdown-container {
+  transform: translateY(-10px);
+}
+
+.group:hover .dropdown-container {
+  transform: translateY(0);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+  background: #e1e1e1;
+}
+
+/* Handle */
+::-webkit-scrollbar-thumb {
+  background: var(--color-gold);
+  border-radius: 5px;
+}
+
+/* Handle on hover */
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-darkgold);
+}
+
+.account_box {
+  transform: translate3d(0, 15px, 0);
+}
+
+.continue::before {
+  content: "";
+  width: 132px;
+  height: 3px;
+  position: absolute;
+  top: 50%;
+  left: -146px;
+  background: linear-gradient(
+    269.97deg,
+    var(--color-gold) 4.18%,
+    rgba(196, 196, 196, 0) 77.28%
+  );
+}
+.continue::after {
+  content: "";
+  width: 132px;
+  height: 3px;
+  position: absolute;
+  top: 50%;
+  background: linear-gradient(
+    269.97deg,
+    var(--color-gold) 4.18%,
+    rgba(196, 196, 196, 0) 77.28%
+  );
+  transform: rotate(-180deg);
+  right: -146px;
+}
+
+/* For Categories and BrandStory */
+#stickyContent {
+  position: sticky;
+  top:0px;
+  z-index: 1;
+ 
+}
+
+#scrollContent{
+  position: relative;
+  z-index: 2;
+  border: 2px solid black;
+  transform: translate 0.1s cubic-bezier(0.22,1,0.36,1);
+}
+
+
+/* NewArrivals Mask that hides the products  */
+.mask {
+  transform: translateX(100%);
+  transition: transform 2s cubic-bezier(0.77, 0, 0.175, 1);
+  opacity: 1;
+}
+.mask.reveal {
+  transform: translateX(40%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mask {
+    transition: none;
+  }
+}
+
+/* NewArrivals Products hidden initially  */
+.products {
+  transition: opacity 3s ease-in;
+}
+
+.products.hide {
+  opacity: 0;
+}
+
+.products.show {
+  opacity: 1;
+}
+
+.newArrivalProducts:hover .newArrivalBtn{
+  transform: translate(-5px) scale(1.04);
+}
+
+/* Highlight for brandStory */
+.highlight {
+  font-weight: 600;
+  color: var(--color-gold);
+  text-shadow: 0 2px 10px rgba(251, 205, 91, 0.35);
+}
+
+/* Prevent flash before animation */
+.brand_line {
+  opacity: 0;
+  color: white;
+}
+
+.cards {
+    /* Basic styling for the cards */
+    width: 20%;
+    padding: 15px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    border-radius: 8px;
+}
+
+.animate__animated {
+  animation-duration: 0.8s;
+  animation-fill-mode: both;
+}
+
+.review-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.review-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.3);
+  border-radius: 10px;
+}
+
+.review-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* @keyframes marque {
+  from{
+    transform: translateX(0);
+  }
+  to{
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marque {
+  width: max-content;
+  animation: marque 35s linear infinite;
+}
+
+.animate-marque:hover{
+  animation-play-state: paused;
+} */
+
+@keyframes marquee-left {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes marquee-right {
+  from {
+    transform: translateX(-50%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.track {
+  width: max-content;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.track-left {
+  animation-name: marquee-left;
+  animation-duration: 42s;
+}
+
+.track-right {
+  animation-name: marquee-right;
+  animation-duration: 45s;
+}
+
+.track-left:hover , .track-right:hover {
+  animation-play-state: paused;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.newArrivalsTextBox {
+/*           (StraightRight Shadow)   (StraightLeft shadow)  (Down Shadow)     (Upside Shadow)*/
+text-shadow: 2px 0 #000000, -2px 0 rgb(255, 255, 255), 0 2px rgb(0, 0, 0) , 0 -2px #f7f7f7,
+             1px 1px #000000, -1px -1px #000000, 1px -1px #000000, -1px 1px #000000;
+
+}
+
+.swiper {
+  width: 100%;
+  padding-top: 50px;
+  padding-bottom: 50px;
+}
+
+.swiper-slide {
+  background-position: center;
+  background-size: cover;
+}
