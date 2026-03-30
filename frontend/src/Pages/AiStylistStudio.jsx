@@ -57,7 +57,7 @@ export default function AiStylistStudio() {
 
     const analyzeImage = async (base64Image) => {
         const backendUrl = import.meta.env.VITE_BACKEND_URL;
-        
+
         const convertToJpeg = (base64) => {
             return new Promise((resolve) => {
                 const img = new Image();
@@ -76,10 +76,10 @@ export default function AiStylistStudio() {
         const jpegImage = await convertToJpeg(base64Image);
         const imageData = jpegImage.includes(',') ? jpegImage.split(',')[1] : jpegImage;
         const sizeInMB = (base64Image.length * 0.75) / 1024 / 1024;
-        
+
         if (sizeInMB > 20) throw new Error('Image too large. Max 20MB.');
 
-        const response = await fetch(backendUrl+ `/api/products/analyze`, {
+        const response = await fetch(backendUrl + `/api/products/analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ imageData, mediaType: 'image/jpeg' }),
@@ -128,16 +128,17 @@ export default function AiStylistStudio() {
     return (
         <div className="min-h-screen mt-20 pb-20 bg-[#f8f5f0] flex items-center justify-center p-4 zyro-card-font">
             <div className="max-w-250 w-full bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-wrap min-h-145">
-                
+
                 {/* LEFT PANEL */}
-                <div className="flex-[0_0_380px] min-w-75 bg-[#f8f5f0] p-6 flex flex-col border-r border-[#ede8e1]">
+                <div className="w-full lg:w-95 bg-[#f8f5f0] p-6 flex flex-col border-b lg:border-b-0 lg:border-r border-[#ede8e1]">
                     <div className="flex items-center gap-2 mb-6">
                         <Sparkles size={16} className="text-[#c9a96e]" />
                         <span className="font-cg text-xl tracking-[3px] text-[#1a1208]">ZYRO</span>
                         <span className="text-[10px] para tracking-widest text-gray-500 uppercase mt-1">Stylist</span>
                     </div>
 
-                    <div className="flex-1 rounded-[20px] overflow-hidden bg-[#1a1208] relative min-h-65">
+                    {/* Image/Webcam */}
+                    <div className="relative rounded-[20px] overflow-hidden bg-[#1a1208] aspect-square lg:aspect-auto lg:flex-1 min-h-75">
                         {!image ? (
                             inputMode === 'camera' ? (
                                 <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" className="w-full h-full object-cover" />
@@ -161,11 +162,11 @@ export default function AiStylistStudio() {
                         )}
                     </div>
 
-                    <div className="mt-4 flex flex-col gap-3">
+                    <div className="mt-6 flex flex-col gap-3">
                         {!image && (
                             <div className="flex bg-[#ede8e1] p-1 rounded-xl gap-1">
                                 {['upload', 'camera'].map(m => (
-                                    <button key={m} onClick={() => setInputMode(m)} className={`flex-1 py-2  text-[10px] tracking-widest uppercase font-medium rounded-lg transition-all ${inputMode === m ? 'bg-white shadow-sm text-[#1a1208]' : 'text-gray-400'}`}>
+                                    <button key={m} onClick={() => setInputMode(m)} className={`flex-1 py-2 text-[10px] tracking-widest uppercase font-medium rounded-lg transition-all ${inputMode === m ? 'bg-white shadow-sm text-[#1a1208]' : 'text-gray-400'}`}>
                                         {m}
                                     </button>
                                 ))}
@@ -173,19 +174,19 @@ export default function AiStylistStudio() {
                         )}
 
                         {!image && inputMode === 'camera' && (
-                            <button onClick={handleCapture} className="py-3 bg-(--color-green) text-white rounded-xl text-[10px] tracking-widest uppercase hover:bg-(--color-gold) font-semibold transition-colors hover:cursor-pointer">
+                            <button onClick={handleCapture} className="py-3 bg-[#2E4A3E] text-white rounded-xl text-[10px] tracking-widest uppercase hover:bg-[#C6A664] font-semibold transition-colors cursor-pointer">
                                 Capture Photo
                             </button>
                         )}
 
                         {image && !analysis && !loading && (
-                            <button onClick={runAnalysis} className="py-3.5 bg-[#1a1208] text-[#c9a96e] rounded-xl text-[11px] tracking-[3px] uppercase font-medium flex items-center justify-center gap-2 hover:bg-black transition-colors hover:cursor-pointer">
+                            <button onClick={runAnalysis} className="py-3.5 bg-[#1a1208] text-[#c9a96e] rounded-xl text-[11px] tracking-[3px] uppercase font-medium flex items-center justify-center gap-2 hover:bg-black transition-colors cursor-pointer">
                                 <Sparkles size={13} /> Analyze My Style <ChevronRight size={13} />
                             </button>
                         )}
 
                         {image && (
-                            <button onClick={reset} className="py-2 text-[10px] tracking-widest uppercase text-gray-400 hover:cursor-pointer hover:text-gray-600 transition-colors">
+                            <button onClick={reset} className="py-2 text-[10px] tracking-widest uppercase text-gray-400 cursor-pointer hover:text-gray-600 transition-colors">
                                 Clear & Start Over
                             </button>
                         )}
@@ -268,8 +269,8 @@ export default function AiStylistStudio() {
                                         <p className="font-cg text-lg font-semibold">{analysis.outfitColorName} <span className="text-xs text-gray-500 font-normal">({analysis.outfitColorTemp})</span></p>
                                         <p className="text-[13px] para mt-1 leading-relaxed text-black font-medium">
                                             {analysis.outfitColorTemp === 'warm' ? 'Gold and earth-toned jewelry will harmonize beautifully.' :
-                                             analysis.outfitColorTemp === 'cool' ? 'Silver, platinum, and cool gemstones will complement this.' :
-                                             'Both gold and silver work well with your neutral outfit.'}
+                                                analysis.outfitColorTemp === 'cool' ? 'Silver, platinum, and cool gemstones will complement this.' :
+                                                    'Both gold and silver work well with your neutral outfit.'}
                                         </p>
                                     </div>
                                 </div>
