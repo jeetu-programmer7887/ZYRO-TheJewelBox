@@ -26,7 +26,7 @@ const NewArrivals = () => {
       <div className="px-10 mt-20 py-5 ">
         <div className="text-center mb-12 px-4">
         <p className="text-sm tracking-widest text-gray-400 title mb-3">BROWSE</p>
-        <div className="text-center tracking-widest text-6xl w-full  text-(--color-gold)  font-cinzel ">NEW <span className='para'>ARRIVALS COLLECTION</span> </div>
+        <div className="text-center tracking-widest text-4xl w-full  text-(--color-gold)  font-cinzel ">NEW <span className='para'>ARRIVALS COLLECTION</span> </div>
         </div>
       </div>
 

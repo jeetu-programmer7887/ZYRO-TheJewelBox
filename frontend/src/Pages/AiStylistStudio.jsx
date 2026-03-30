@@ -126,11 +126,11 @@ export default function AiStylistStudio() {
     const neckline = analysis ? (necklinePatterns[analysis.necklineType] || necklinePatterns["Unknown"]) : null;
 
     return (
-        <div className="min-h-screen mt-20 pb-20 bg-[#f8f5f0] flex items-center justify-center p-8 zyro-card-font">
+        <div className="min-h-screen mt-20 pb-20 bg-[#f8f5f0] flex items-center justify-center p-4 zyro-card-font">
             <div className="max-w-250 w-full bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-wrap min-h-145">
                 
                 {/* LEFT PANEL */}
-                <div className="flex-[0_0_380px] min-w-75 bg-[#f8f5f0] p-8 flex flex-col border-r border-[#ede8e1]">
+                <div className="flex-[0_0_380px] min-w-75 bg-[#f8f5f0] p-6 flex flex-col border-r border-[#ede8e1]">
                     <div className="flex items-center gap-2 mb-6">
                         <Sparkles size={16} className="text-[#c9a96e]" />
                         <span className="font-cg text-xl tracking-[3px] text-[#1a1208]">ZYRO</span>

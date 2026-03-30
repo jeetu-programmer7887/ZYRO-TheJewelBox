@@ -402,7 +402,7 @@ const Navbar = () => {
             {/* Main Navigation */}
             <div className="space-y-1 pt-4 border-t border-gray-200">
               <NavLink
-                to="/newArrivals"
+                to="/new-arrivals"
                 className="block py-3 px-3 text-gray-800 font-medium hover:text-(--color-gold) hover:bg-gray-50 rounded-lg transition-all"
                 onClick={() => setIsMobileMenuOpen(false)}
               >
