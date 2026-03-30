@@ -17,12 +17,12 @@ import reviewRouter from './routes/reviewRoutes.js';
 const app = express();
 const port = process.env.PORT || 8080;
 
-app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  // origin: "https://7g57xz6f-5173.inc1.devtunnels.ms",
-//   origin: "https://9093xncm-5173.inc1.devtunnels.ms",
-  credentials: true                  
-}));
+// app.use(cors({
+//   origin: process.env.FRONTEND_URL,
+//   // origin: "https://7g57xz6f-5173.inc1.devtunnels.ms",
+// //   origin: "https://9093xncm-5173.inc1.devtunnels.ms",
+//   credentials: true                  
+// }));
 
 // Middlewares
 app.use(cookieParser());
