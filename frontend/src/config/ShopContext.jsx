@@ -140,7 +140,15 @@ const ShopContextProvider = (props) => {
       return;
     }
 
-    setWishlist(prev => [itemId, ...prev]);
+    setWishlist(prev => {
+      const updated = [...prev, itemId];
+
+      if (!user.isLoggedIn) {
+        localStorage.setItem('wishlist', JSON.stringify(updated));
+      }
+
+      return updated;
+    });
 
     if (user.isLoggedIn) {
       try {

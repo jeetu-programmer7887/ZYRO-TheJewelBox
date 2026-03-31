@@ -74,7 +74,7 @@ const Wishlist = () => {
                 /* --- GRID VIEW --- */
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-10">
                     {wishlistItems.map((item) => (
-                        <WishlistCard key={item.id} product={item} />
+                        <WishlistCard key={item._id} product={item} />
                     ))}
                 </div>
             ) : (
