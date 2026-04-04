@@ -84,7 +84,25 @@ const Profile = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSave = async () => {
+const handleSave = async () => {
+    // Age Validation Logic
+    if (formData.birthdate) {
+      const today = new Date();
+      const birthDate = new Date(formData.birthdate);
+      
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+      
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+
+      if (age < 13) {
+        toast.error("You must be at least 13 years old to use ZYRO.");
+        return;
+      }
+    }
+
     try {
       const { email, ...updateData } = formData;
       const response = await axios.patch(backendUrl + "/api/user/update-profile", updateData);

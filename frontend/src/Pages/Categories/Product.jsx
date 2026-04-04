@@ -144,7 +144,7 @@ export const Product = () => {
             return;
         }
 
-        const prompt = `I am uploading two images:\n1. The jewellery product image\n2. My photo\n\nGenerate a realistic image of me wearing that exact jewellery. Keep the focus on my face and make sure the face consistency is maintained well. Do not change anything else about my appearance, outfit but you can change the suitable background if required.`;
+        const prompt = `I am uploading two images:\n1. The jewellery product image\n2. My photo\n\nGenerate a realistic image of me wearing that exact jewellery. Keep the focus on my face and make sure the face consistency is maintained well. Do not change anything else about my appearance, outfit but you can change the suitable background if required. Generate the image in the aspect ration of 3:4`;
 
         try {
             await navigator.clipboard.writeText(prompt);

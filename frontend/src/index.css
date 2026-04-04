@@ -4,55 +4,6 @@
 @import 'animate.css';
 
 
-
-.zyro-card-font {
-  font-family: 'Jost', sans-serif;
-}
-
-.result-card {
-  animation: fadeSlideUp 0.5s ease forwards;
-  opacity: 0;
-}
-
-@keyframes fadeSlideUp {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.pulse-dot::after {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #c9a96e;
-  margin-left: 6px;
-  animation: pulse 1s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
-}
-
-
-
 :root {  
   --navbar-white: rgba(255, 255, 255, 0.8);
   --color-green: #2e4a3e;
@@ -452,4 +403,50 @@ text-shadow: 2px 0 #000000, -2px 0 rgb(255, 255, 255), 0 2px rgb(0, 0, 0) , 0 -2
 .swiper-slide {
   background-position: center;
   background-size: cover;
+}
+
+.zyro-card-font {
+  font-family: 'Jost', sans-serif;
+}
+
+.result-card {
+  animation: fadeSlideUp 0.5s ease forwards;
+  opacity: 0;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pulse-dot::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c9a96e;
+  margin-left: 6px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
 }
