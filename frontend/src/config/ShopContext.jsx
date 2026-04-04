@@ -153,15 +153,13 @@ const ShopContextProvider = (props) => {
     if (user.isLoggedIn) {
       try {
         await axios.post(backendUrl + '/api/cart/add-wish', { itemId });
-        toast.success("Added to wishlist", {
-          position: "bottom-right"
-        });
+        toast.success("Added to wishlist");
         toast
       } catch (error) {
         console.error("Wishlist Sync Error:", error);
       }
     } else {
-      toast.success("Saved to your local wishlist!");
+      toast.success("Added to wishlist");
     }
   };
 
