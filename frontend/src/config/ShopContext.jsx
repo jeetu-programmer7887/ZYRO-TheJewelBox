@@ -85,8 +85,6 @@ const ShopContextProvider = (props) => {
           return acc;
         }, {});
 
-        console.log("Categories found:", Object.keys(productsByCategory));
-
         // From each category, pick the 8 most recently added products
         const newArrivalsPerCategory = Object.values(productsByCategory).flatMap(categoryProducts => {
           return [...categoryProducts]

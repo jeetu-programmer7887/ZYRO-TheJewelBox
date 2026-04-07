@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 
-const Inputfield = ({ label, name, value, type, disabled = false, handleChange }) => (
+const Inputfield = ({ label, name, value, type, disabled = false, handleChange, maxLength, max }) => (
   <div className="flex flex-col">
     <label htmlFor={name} className="mb-1 para text-(--color-gold) font-bold text-sm">{label}</label>
     <input
@@ -15,6 +15,8 @@ const Inputfield = ({ label, name, value, type, disabled = false, handleChange }
       value={value}
       disabled={disabled}
       onChange={handleChange}
+      maxLength={maxLength}
+      max={max}
       className={`border border-gray-300 rounded-lg text-gray-500 text-sm focus:outline-none focus:ring-1 focus:ring-(--color-gold) py-2 px-3 w-full ${disabled ? "bg-gray-200 cursor-not-allowed" : "bg-white"}`}
     />
   </div>
@@ -65,34 +67,47 @@ const Profile = () => {
   });
   const navigate = useNavigate();
 
+  const today = new Date();
+  const maxDateLimit = new Date(today.getFullYear() - 13, today.getMonth(), today.getDate())
+    .toISOString()
+    .split("T")[0];
+
   useEffect(() => {
     if (user?.isLoggedIn && !isEditing) {
       setFormData({
-        firstName:  user.firstName  || "",
-        lastName:   user.lastName   || "",
-        email:      user.email      || "",
-        mobile:     user.mobile     || "",
-        pincode:    user.pincode    || "",
-        birthdate:  user.birthdate ? formatDateToDisplay(user.birthdate) : "",
-        gender:     user.gender     || "",
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        email: user.email || "",
+        mobile: user.mobile || "",
+        pincode: user.pincode || "",
+        birthdate: user.birthdate ? user.birthdate.split("T")[0] : "",
+        gender: user.gender || "",
       });
     }
   }, [user, isEditing]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+
+    if (name === "pincode" || name === "mobile") {
+      const numericValue = value.replace(/\D/g, "");
+      const limit = name === "pincode" ? 6 : 10;
+
+      if (numericValue.length <= limit) {
+        setFormData(prev => ({ ...prev, [name]: numericValue }));
+      }
+      return;
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-const handleSave = async () => {
-    // Age Validation Logic
+  const handleSave = async () => {
     if (formData.birthdate) {
-      const today = new Date();
       const birthDate = new Date(formData.birthdate);
-      
       let age = today.getFullYear() - birthDate.getFullYear();
       const monthDiff = today.getMonth() - birthDate.getMonth();
-      
+
       if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
         age--;
       }
@@ -103,14 +118,27 @@ const handleSave = async () => {
       }
     }
 
+    if (formData.pincode && formData.pincode.length !== 6) {
+      toast.error("Pincode must be exactly 6 digits.");
+      return;
+    }
+
+    if (formData.mobile.length !== 10) {
+      toast.error("Mobile number must be exactly 10 digits.");
+      return;
+    }
+
     try {
       const { email, ...updateData } = formData;
       const response = await axios.patch(backendUrl + "/api/user/update-profile", updateData);
+
       if (response.data.success) {
         const fullUsername = `${formData.firstName} ${formData.lastName}`.trim();
+
         setUser({ ...user, ...formData, username: fullUsername });
+
         toast.success(response.data.message || "Details updated successfully");
-        setTimeout(() => window.location.reload(), 1500);
+        setIsEditing(false);
       }
     } catch (error) {
       toast.error(error.response?.data?.message || "Profile update failed");
@@ -145,7 +173,6 @@ const handleSave = async () => {
       }
     } catch (err) {
       toast.error("Logout failed. Please try again.");
-      console.error("Logout error:", err);
     }
   };
 
@@ -163,13 +190,13 @@ const handleSave = async () => {
   };
 
   const fields = [
-    { label: "First Name",     name: "firstName", type: "text" },
-    { label: "Last Name",      name: "lastName",  type: "text" },
-    { label: "Email",          name: "email",     type: "email", disabled: true },
-    { label: "Mobile Number",  name: "mobile",    type: "text" },
-    { label: "Pincode",        name: "pincode",   type: "text" },
-    { label: "Birthdate",      name: "birthdate", type: "date" },
-    { label: "Gender",         name: "gender",    type: "select", options: ["Male", "Female", "Other"] },
+    { label: "First Name", name: "firstName", type: "text" },
+    { label: "Last Name", name: "lastName", type: "text" },
+    { label: "Email", name: "email", type: "email", disabled: true },
+    { label: "Mobile Number (+91)", name: "mobile", type: "text", maxLength: 10 },
+    { label: "Pincode", name: "pincode", type: "tel", maxLength: 6 },
+    { label: "Birthdate", name: "birthdate", type: "date", max: maxDateLimit },
+    { label: "Gender", name: "gender", type: "select", options: ["Male", "Female", "Other"] },
   ];
 
   // ── Styles ──
@@ -205,9 +232,13 @@ const handleSave = async () => {
           isEditing ? (
             field.type === "select"
               ? <SelectField key={field.name} {...field} value={formData[field.name]} handleChange={handleChange} />
-              : <Inputfield   key={field.name} {...field} value={formData[field.name]} handleChange={handleChange} />
+              : <Inputfield key={field.name} {...field} value={formData[field.name]} handleChange={handleChange} />
           ) : (
-            <DisplayField key={field.name} label={field.label} value={formData[field.name]} />
+            <DisplayField
+              key={field.name}
+              label={field.label}
+              value={field.name === 'birthdate' ? formatDateToDisplay(formData[field.name]) : formData[field.name]}
+            />
           )
         )}
       </div>
@@ -216,14 +247,14 @@ const handleSave = async () => {
       <div className="pt-2 flex flex-col sm:flex-row flex-wrap gap-3">
         {isEditing ? (
           <>
-            <button onClick={handleSave}   className={`${primaryBtn} w-full sm:w-auto`}>Save Changes</button>
+            <button onClick={handleSave} className={`${primaryBtn} w-full sm:w-auto`}>Save Changes</button>
             <button onClick={handleCancel} className={`${primaryBtn} w-full sm:w-auto`}>Cancel</button>
           </>
         ) : (
           <>
             <button onClick={handleChangePassword} className={`${primaryBtn} w-full sm:w-auto`}>Change Password</button>
-            <button onClick={handleLogout}          className={`${primaryBtn} w-full sm:w-auto`}>Logout</button>
-            <button onClick={handleDelete}          className={`${deleteBtn}  w-full sm:w-auto`}>Delete Account</button>
+            <button onClick={handleLogout} className={`${primaryBtn} w-full sm:w-auto`}>Logout</button>
+            <button onClick={handleDelete} className={`${deleteBtn}  w-full sm:w-auto`}>Delete Account</button>
           </>
         )}
       </div>

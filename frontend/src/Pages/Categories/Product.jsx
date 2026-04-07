@@ -202,7 +202,9 @@ export const Product = () => {
                 confirmButtonText: '🚀 Open AI Studio',
             }).then((result) => {
                 if (result.isConfirmed) {
-                    window.open("https://gemini.google.com/app", "_blank");
+                    if (result.isConfirmed) {
+                        window.location.href = "https://gemini.google.com";
+                    }
                 }
             });
         }

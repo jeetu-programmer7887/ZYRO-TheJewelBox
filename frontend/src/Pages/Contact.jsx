@@ -8,7 +8,6 @@ const SUBJECTS = [
   "Order Inquiry",
   "Product Question",
   "Collaboration",
-  "Return / Exchange",
   "Feedback",
   "Other",
 ];
@@ -139,7 +138,7 @@ const Contact = () => {
                   name="email"
                   type="email"
                   required
-                  placeholder="name@example.com"
+                  placeholder="jogndoe123@gmail.com"
                   onFocus={() => setFocused("email")}
                   onBlur={() => setFocused(null)}
                   className={fieldClass("email")}

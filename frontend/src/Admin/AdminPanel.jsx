@@ -49,7 +49,7 @@ const AdminPanel = () => {
       {/* Sidebar - Desktop */}
       <div className="hidden lg:flex flex-col lg:w-1/5 border-r bg-(--color-lightgreen) border-gray-400">
         <div className="name py-9 px-10 xl:px-15 border-b border-gray-400">
-          <h1 className="text-2xl font-bold text-(--color-gold) truncate tracking-normal">
+          <h1 className="text-2xl font-bold text-(--color-gold) tracking-normal">
             ADMIN PANEL
           </h1>
           <p className="text-gray-500 text-sm truncate mt-1 font-normal">Management & Controls</p>

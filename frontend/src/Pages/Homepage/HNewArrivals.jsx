@@ -15,7 +15,7 @@ const Cards = ({title,image,price,id,originalPrice,discount}) => (
         </div>
 
         <div className="info my-5  items-center px-3 flex flex-col justify-between ">
-          <p className="text-sm text-gray-800 font-semibold line-clamp-2  truncate w-45">
+          <p className="text-sm px-2.5 text-gray-800 font-semibold line-clamp-2  truncate w-45">
            {title}
           </p>
         <p className="text-gray-500 gap-2 flex text-sm text-center transition-all duration-300 "><span className=''>₹{price}</span><span className='text-green-600 font-bold'>SAVE {discount}%</span> </p>
