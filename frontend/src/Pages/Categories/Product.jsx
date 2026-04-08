@@ -185,7 +185,7 @@ export const Product = () => {
                 },
             }).then((result) => {
                 if (result.isConfirmed) {
-                    window.open("https://gemini.google.com/app", "_blank");
+                    window.open("https://gemini.google.com", "_blank", "noopener,noreferrer");
                 }
             });
 
@@ -203,7 +203,7 @@ export const Product = () => {
             }).then((result) => {
                 if (result.isConfirmed) {
                     if (result.isConfirmed) {
-                        window.location.href = "https://gemini.google.com";
+                        window.open("https://gemini.google.com", "_blank", "noopener,noreferrer");
                     }
                 }
             });
