@@ -54,7 +54,7 @@ Built on the **MERN stack**, ZYRO integrates two cutting-edge AI models — **Go
 - **SKU-level inventory management** — variants per color, material, and stock level with anti-tarnish tracking
 - **Infinite scroll** powered by the **Intersection Observer API** — products lazy-loaded in batches of 12 for silky 60fps browsing
 - **Admin Suite** — full catalog management, order tracking, returns processing, and real-time sales statistics
-- **Cron-based order expiration** — unpaid orders automatically released after 15 minutes, freeing inventory
+- **Cron-based order updation** — cron jobs is used to automatically update the status of the order
 
 ---
 
@@ -189,7 +189,7 @@ npm run dev
 |:---|:---|:---|
 | **Database Projection** | Selective `select()` fields in Mongoose queries | Reduced API payload size |
 | **Infinite Scroll** | Intersection Observer API, batch size of 12 | Consistent 60fps on large catalogs |
-| **Inventory Locking** | 15-minute cron job releases unpaid order stock | Prevents ghost inventory depletion |
+| **Order Updation** |  On every 0th minute of each hour the status of the order is updated depending upon the date and time | No need to handle order status manually
 | **Image CDN** | All assets served via Cloudinary with auto-format | Faster LCP, WebP delivery |
 
 ---
