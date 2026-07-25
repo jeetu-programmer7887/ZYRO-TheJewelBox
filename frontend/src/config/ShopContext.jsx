@@ -1,8 +1,10 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import { createContext, useState, useEffect } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
 const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ShopContext = createContext();
 
 const ShopContextProvider = (props) => {
@@ -34,7 +36,7 @@ const ShopContextProvider = (props) => {
           }
         } catch (error) {
           setUser({ isLoggedIn: false });
-          console.log("Auth: No active session (Guest Mode)");
+          console.log("Auth: No active session (Guest Mode)", error.message);
         }
       } else {
         try {
@@ -46,7 +48,7 @@ const ShopContextProvider = (props) => {
           }
         } catch (error) {
           setUser({ isLoggedIn: false });
-          console.log("Auth: No active session (Guest Mode)");
+          console.log("Auth: No active session (Guest Mode)", error.message);
         }
       }
     };

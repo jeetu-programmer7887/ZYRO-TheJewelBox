@@ -73,27 +73,13 @@ const analyzeImage = async (req, res) => {
       });
     }
 
-    const response = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mediaType};base64,${imageData}`,
-              },
-            },
-            {
-              type: "text",
-              text: `You are a professional jewelry and fashion stylist.
+    const stylistPrompt = `You are a professional jewelry and fashion stylist.
                     Return raw JSON only. Do not include 'Based on the image' or any other introductory text. Start your response with '{' and end with '}'.
-                    
+
                     CRITICAL VALIDATION STEPS:
                     1. Check if a human is clearly visible. If it's an object, paper, or landscape, set "isPersonDetected" to false.
                     2. Check image clarity and lighting. If the image is too dark, extremely blurry, or overexposed, set "isQualityAcceptable" to false.
-                    3.This is the most important step. If the neckline is cropped out of the frame or if it is not visible clearly, you MUST set "necklineType" to "Unknown" and set the confidence to 0.
+                    3. This is the most important step. If the neckline is cropped out of the frame or if it is not visible clearly, you MUST set "necklineType" to "Unknown" and set the confidence to 0.
 
                     Analyze this photo and return ONLY a valid JSON object:
                     {
@@ -104,22 +90,94 @@ const analyzeImage = async (req, res) => {
                     "necklineType": "V-Neck" | "Sweetheart" | "Square" | "Boat Neck" | "Asymmetrical" | "Strapless" | "U-Shape" | "Round" | "Halter" | "Off-Shoulder" | "Unknown",
                     "outfitColorName": string,
                     "outfitColorHex": string,
+                    "outfitColorTemp": "warm" | "cool" | "neutral",
                     "confidence": number 0-100,
                     "stylistNote": string
-                    }`,
-            },
-          ],
-        },
-      ],
-      max_tokens: 600,
-      temperature: 0.1,
-    });
+                    }`;
 
-    const raw = response.choices[0].message.content
+    const buildMessages = () => [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${mediaType};base64,${imageData}`,
+            },
+          },
+          {
+            type: "text",
+            text: stylistPrompt,
+          },
+        ],
+      },
+    ];
+
+    let response;
+    try {
+      response = await groq.chat.completions.create({
+        model: "qwen/qwen3.6-27b",
+        response_format: { type: "json_object" },
+        reasoning_effort: "none",
+        messages: buildMessages(),
+        max_tokens: 1200,
+        temperature: 0.1,
+      });
+    } catch (apiError) {
+      if (apiError?.error?.code === "json_validate_failed" || apiError?.status === 400) {
+        console.warn(
+          "Strict JSON mode failed, retrying without response_format:",
+          apiError.message
+        );
+        try {
+          response = await groq.chat.completions.create({
+            model: "qwen/qwen3.6-27b",
+            reasoning_effort: "none",
+            messages: buildMessages(),
+            max_tokens: 1200,
+            temperature: 0.1,
+          });
+        } catch (retryError) {
+          console.error(
+            "Groq API call failed on retry:",
+            retryError.status,
+            retryError.message
+          );
+          return res.status(500).json({
+            success: false,
+            message: "Analysis failed. Our stylist is temporarily unavailable.",
+          });
+        }
+      } else {
+        // Auth errors, model errors, rate limits, etc.
+        console.error("Groq API call failed:", apiError.status, apiError.message);
+        return res.status(500).json({
+          success: false,
+          message: "Analysis failed. Our stylist is temporarily unavailable.",
+        });
+      }
+    }
+
+    let raw = response.choices[0].message.content
       .replace(/```json|```/g, "")
       .trim();
-    const parsed = JSON.parse(raw);
-   
+
+    const firstBrace = raw.indexOf("{");
+    const lastBrace = raw.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      raw = raw.slice(firstBrace, lastBrace + 1);
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseError) {
+      console.error("Failed to parse model output as JSON. Raw output was:", raw);
+      return res.status(500).json({
+        success: false,
+        message: "Analysis failed. Our stylist is temporarily unavailable.",
+      });
+    }
 
     // 1. Check if a person exists
     if (!parsed.isPersonDetected) {
@@ -153,7 +211,7 @@ const analyzeImage = async (req, res) => {
     }
 
     // 4. Check if the neckline is visible clearly
-      if (parsed.necklineType === "Unknown" || parsed.qualityIssue === "Neckline Not Detected") {
+    if (parsed.necklineType === "Unknown" || parsed.qualityIssue === "Neckline Not Detected") {
       return res.status(422).json({
         success: false,
         message:
@@ -161,18 +219,16 @@ const analyzeImage = async (req, res) => {
       });
     }
 
-
     // If all checks pass
     return res.json({ success: true, ...parsed });
   } catch (error) {
-    console.log("Groq Analysis Error:", error.message);
+    console.error("Groq Analysis Error:", error);
     return res.status(500).json({
       success: false,
       message: "Analysis failed. Our stylist is temporarily unavailable.",
     });
   }
 };
-
 
 //To get stock details
 const getStock = async (req, res) => {

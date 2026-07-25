@@ -141,6 +141,7 @@ const router = createBrowserRouter([
 ])
 
 // ── Global Chat Support ──
+// eslint-disable-next-line react-refresh/only-export-components
 const ZYROChatSupport = () => {
   const { backendUrl } = useContext(ShopContext)
   return <ChatWidget backendUrl={backendUrl} />
