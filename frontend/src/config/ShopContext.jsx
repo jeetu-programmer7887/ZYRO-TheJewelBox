@@ -15,6 +15,10 @@ const ShopContextProvider = (props) => {
 
   const [otp, setTotp] = useState("");
   const [user, setUser] = useState({});
+  // Tracks whether the initial "am I logged in?" check has finished.
+  // Route guards wait on this so they don't redirect a real user before
+  // we actually know their auth state.
+  const [authChecked, setAuthChecked] = useState(false);
   const [allProducts, setAllProducts] = useState([]);
   const [cartItems, setCartItems] = useState({});
   const [cartData, setCartData] = useState([]);
@@ -51,6 +55,7 @@ const ShopContextProvider = (props) => {
           console.log("Auth: No active session (Guest Mode)", error.message);
         }
       }
+      setAuthChecked(true);
     };
     checkAuth();
   }, []);
@@ -287,7 +292,7 @@ const ShopContextProvider = (props) => {
   // Provider Value 
   const value = {
     otp, setTotp,
-    user, setUser, backendUrl,
+    user, setUser, authChecked, backendUrl,
     allProducts, currency, deliveryFee,
     addToCart, cartItems, setCartItems, updateQuantity, getCartCount,
     wishlist, addToWishlist, removeFromWishlist, getWishlistData, getWishlistCount,

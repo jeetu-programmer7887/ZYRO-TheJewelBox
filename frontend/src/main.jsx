@@ -9,6 +9,7 @@ import axios from 'axios'
 import './index.css'
 import ShopContextProvider, { ShopContext } from './config/ShopContext.jsx'
 import PageRouting from './Layouts/PageRouting.jsx'
+import { GuestRoute, ProtectedRoute, AdminRoute } from './Layouts/RouteGuards.jsx'
 
 // ── Pages ──
 import App from './App.jsx'
@@ -60,6 +61,7 @@ import AdminEditProduct from './Admin/AdminEditProduct.jsx'
 // ── Components ──
 import ChatWidget from './Components/ChatWidget.jsx'
 import AdminReviews from './Admin/AdminReviews.jsx'
+import NotFound from './Pages/NotFound.jsx'
 
 // ── Config ──
 axios.defaults.withCredentials = true
@@ -85,12 +87,17 @@ const router = createBrowserRouter([
       { path: 'cart',               element: <Cart /> },
       { path: 'wishlist',           element: <Wishlist /> },
 
-      // Auth
-      { path: 'login',              element: <Login /> },
-      { path: 'signup',             element: <Signup /> },
-      { path: 'verify-email',       element: <VerifyEmail /> },
-      { path: 'forgot-password',    element: <ForgotPassword /> },
-      { path: 'reset-password',     element: <ResetPassword /> },
+      // Auth (blocked for already-logged-in users)
+      {
+        element: <GuestRoute />,
+        children: [
+          { path: 'login',           element: <Login /> },
+          { path: 'signup',          element: <Signup /> },
+          { path: 'verify-email',    element: <VerifyEmail /> },
+          { path: 'forgot-password', element: <ForgotPassword /> },
+          { path: 'reset-password',  element: <ResetPassword /> },
+        ],
+      },
 
       // Policies
       { path: 'faq',                element: <FAQ /> },
@@ -109,33 +116,44 @@ const router = createBrowserRouter([
         ],
       },
 
-      // User Account
+      // User Account (requires a logged-in "user")
       {
-        path: 'userAccount',
-        element: <UserAccountLayout />,
+        element: <ProtectedRoute />,
         children: [
-          { index: true,        element: <Profile /> },
-          { path: 'order',      element: <Order /> },
-          { path: 'cancel',     element: <Cancelled /> },
-          { path: 'returns',    element: <Returns /> },
-          { path: 'coins',      element: <Coins /> },
+          {
+            path: 'userAccount',
+            element: <UserAccountLayout />,
+            children: [
+              { index: true,        element: <Profile /> },
+              { path: 'order',      element: <Order /> },
+              { path: 'cancel',     element: <Cancelled /> },
+              { path: 'returns',    element: <Returns /> },
+              { path: 'coins',      element: <Coins /> },
+            ],
+          },
         ],
       },
 
-      // Admin
+      // Admin (requires a logged-in "admin")
       {
-        path: 'admin',
-        element: <AdminPanel />,
+        element: <AdminRoute />,
         children: [
-          { index: true,        element: <AdminOrders /> },
-          { path: 'dashboard',  element: <AdminDashboard /> },
-          { path: 'orders',     element: <AdminOrders /> },
-          { path: 'add',        element: <AddProduct /> },
-          { path: 'reviews',     element: <AdminReviews /> },
-          { path: 'list',       element: <ListProducts /> },
-          { path: 'edit/:id',   element: <AdminEditProduct /> },
+          {
+            path: 'admin',
+            element: <AdminPanel />,
+            children: [
+              { index: true,        element: <AdminOrders /> },
+              { path: 'dashboard',  element: <AdminDashboard /> },
+              { path: 'orders',     element: <AdminOrders /> },
+              { path: 'add',        element: <AddProduct /> },
+              { path: 'reviews',     element: <AdminReviews /> },
+              { path: 'list',       element: <ListProducts /> },
+              { path: 'edit/:id',   element: <AdminEditProduct /> },
+            ],
+          },
         ],
       },
+      {path: "*", element: <NotFound/>},
     ],
   },
 ])
