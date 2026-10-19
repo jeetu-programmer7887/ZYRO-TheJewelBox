@@ -1,18 +1,29 @@
-import { useContext, useState, useMemo } from 'react';
+import { useContext, useState, useMemo, useEffect } from 'react';
 import { ShopContext } from '../config/ShopContext';
 import { Link } from 'react-router-dom';
 import { Eye } from 'lucide-react';
+import { optimizeImage } from '../Utility/image';
 
 const Search = () => {
-    const { allProducts, currency } = useContext(ShopContext);
+    const { allProducts, currency, productsLoading } = useContext(ShopContext);
     const [searchTerm, setSearchTerm] = useState("");
+    const [debouncedTerm, setDebouncedTerm] = useState("");
+
+    // Filter once the customer pauses typing instead of on every keystroke
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedTerm(searchTerm), 250);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
+
+    const isTyping = searchTerm.trim() !== debouncedTerm.trim();
+    const isPending = productsLoading || isTyping;
 
     // Filter Logic
     const filteredProducts = useMemo(() => {
         if (!allProducts) return [];
-        if (!searchTerm.trim()) return [];
+        if (!debouncedTerm.trim()) return [];
 
-        const searchWords = searchTerm.toLowerCase().split(" ");
+        const searchWords = debouncedTerm.toLowerCase().split(/\s+/).filter(Boolean);
 
         return allProducts.filter(item => {
             const title = item.title?.toLowerCase() || "";
@@ -22,7 +33,7 @@ const Search = () => {
                 title.includes(word) || category.includes(word)
             );
         });
-    }, [allProducts, searchTerm]);
+    }, [allProducts, debouncedTerm]);
 
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 mt-15 min-h-screen">
@@ -47,9 +58,9 @@ const Search = () => {
                     </div>
                 </div>
 
-                {searchTerm && (
+                {searchTerm.trim() && (
                     <p className="mt-4 text-(--color-green) animate-pulse text-lg font-semibold">
-                        Showing {filteredProducts.length} items for your search
+                        {isPending ? "Searching..." : `Showing ${filteredProducts.length} items for your search`}
                     </p>
                 )}
             </div>
@@ -63,8 +74,10 @@ const Search = () => {
                         <Link to={`/product/${item._id}`} className="relative w-full aspect-4/5 sm:aspect-square overflow-hidden bg-gray-50">
                             <img
                                 className="w-full h-full object-cover transition-transform duration-700 ease-in-out group-hover:scale-110"
-                                src={item.images?.[0] || item.image}
+                                src={optimizeImage(item.images?.[0] || item.image, 500)}
                                 alt={item.title}
+                                loading="lazy"
+                                decoding="async"
                             />
                         </Link>
 
@@ -107,7 +120,7 @@ const Search = () => {
             </div>
 
             {/* Empty State */}
-            {searchTerm && filteredProducts.length === 0 && (
+            {searchTerm.trim() && !isPending && filteredProducts.length === 0 && (
                 <div className="text-center py-24">
                     <div className="bg-gray-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
                         <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -120,7 +133,7 @@ const Search = () => {
             )}
 
             {/* Initial State */}
-            {!searchTerm && (
+            {!searchTerm.trim() && (
                 <div className="text-center py-24 text-(--color-gold)">
                     <p className="text-xl italic font-medium">Type to explore our collection...</p>
                 </div>

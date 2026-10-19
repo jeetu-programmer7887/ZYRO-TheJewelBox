@@ -1,17 +1,18 @@
 import { useContext, useState, useEffect } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ShopContext } from "../config/ShopContext";
-import axios from "axios";
 import Tooltip from "./Tooltip";
 import { toast } from "react-toastify";
 
 const Navbar = () => {
-  const { backendUrl, user, setUser, getCartCount, getWishlistCount } = useContext(ShopContext);
+  const { user, logout, getCartCount, getWishlistCount } = useContext(ShopContext);
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const location = useLocation();
-  const getUsername = user?.username || `${user.firstName + " " + user.lastName}`
-  const role = localStorage.getItem('role');
+  const navigate = useNavigate();
+  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
+  const getUsername = user?.username || fullName || user?.email || "My Account";
+  const role = user?.role || null;
 
   const nonTransRoutes = [
     "/login",
@@ -50,33 +51,9 @@ const Navbar = () => {
   ];
 
   const handleLogout = async () => {
-    try {
-      // 1. Determine the endpoint based on the role
-      const role = localStorage.getItem('role');
-      const endpoint = role === 'admin' ? "/api/admin/logout" : "/api/user/logout";
-
-      // 2. Make the call
-      const { data } = await axios.post(backendUrl + endpoint);
-
-      if (data.success) {
-        localStorage.removeItem('role');
-
-        setUser({
-          firstName: "",
-          lastName: "",
-          isLoggedIn: false,
-        });
-
-        toast.success(data.message || "Logged out successfully");
-
-        setTimeout(() => {
-          window.location.href = '/';
-        }, 1500);
-      }
-    } catch (err) {
-      toast.error("Logout failed. Please try again.");
-      console.error("Logout error:", err);
-    }
+    await logout();
+    toast.success("Logged out successfully");
+    navigate('/');
   };
 
   useEffect(() => {
@@ -258,11 +235,14 @@ const Navbar = () => {
                     <NavLink to={role === 'user' ? '/userAccount' : '/admin'}>
                       <li className="hover:bg-gray-50 p-2 rounded-md transition-colors">My Account</li>
                     </NavLink>
-                    <li
-                      onClick={handleLogout}
-                      className="hover:bg-gray-50 p-2 rounded-md transition-colors cursor-pointer text-red-500"
-                    >
-                      Logout
+                    <li>
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        className="w-full text-left hover:bg-gray-50 p-2 rounded-md transition-colors cursor-pointer text-red-500"
+                      >
+                        Logout
+                      </button>
                     </li>
                   </ul>
                 </div>
@@ -289,8 +269,8 @@ const Navbar = () => {
           </div>
 
           {/* Wishlist - Desktop Only */}
-          <Tooltip text={"Wislist"}>
-            <NavLink to="/wishlist" className="hidden lg:block">
+          <Tooltip text={"Wishlist"}>
+            <NavLink to="/wishlist" className="hidden lg:block" aria-label="Wishlist">
               <lord-icon
                 src="https://cdn.lordicon.com/nvsfzbop.json"
                 trigger="hover"
@@ -310,7 +290,7 @@ const Navbar = () => {
 
           {/* Cart - Always Visible */}
           <Tooltip text={"Cart"}>
-            <a href="/cart" className="relative inline-flex items-center p-1">
+            <NavLink to="/cart" className="relative inline-flex items-center p-1" aria-label="Cart">
               <lord-icon
                 src="https://cdn.lordicon.com/zmvzumis.json"
                 trigger="hover"
@@ -326,7 +306,7 @@ const Navbar = () => {
                   {getCartCount()}
                 </span>
               )}
-            </a>
+            </NavLink>
           </Tooltip>
 
           {/* Account - Mobile (Click to Login) */}

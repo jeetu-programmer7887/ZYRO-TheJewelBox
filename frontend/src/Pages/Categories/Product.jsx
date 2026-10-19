@@ -1,5 +1,5 @@
-import React, { useContext, useEffect, useMemo, useState, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useContext, useEffect, useState, useRef } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ShopContext } from '../../config/ShopContext';
 import Swal from 'sweetalert2';
 import {
@@ -7,11 +7,16 @@ import {
     Eye, X, ChevronLeft, ChevronRight, Sparkles
 } from 'lucide-react';
 import axios from 'axios';
+import { toast } from 'react-toastify';
+import { optimizeImage } from '../../Utility/image';
 
 export const Product = () => {
     const { productId } = useParams();
-    const { allProducts, currency, addToCart, user, addToWishlist, wishlist, backendUrl } = useContext(ShopContext);
+    const { currency, addToCart, user, addToWishlist, removeFromWishlist, wishlist, cartItems, backendUrl } = useContext(ShopContext);
     const [productData, setProductData] = useState(null);
+    const [loadError, setLoadError] = useState(null); // null | 'notfound' | 'error'
+    const [reviewData, setReviewData] = useState({ reviews: [], totalReviews: 0, avgRating: 0 });
+    const [isAdding, setIsAdding] = useState(false);
     const [mainImage, setMainImage] = useState('');
     const [activeTab, setActiveTab] = useState('description');
     const [currentSlide, setCurrentSlide] = useState(0);
@@ -19,14 +24,17 @@ export const Product = () => {
     const [isViewerOpen, setIsViewerOpen] = useState(false);
     const [viewerIndex, setViewerIndex] = useState(0);
     const navigate = useNavigate();
+    const location = useLocation();
 
+    const isWishlistedId = (id) => wishlist?.includes(id);
     const handleWishlistClick = (_id) => {
-        addToWishlist(_id);
+        if (isWishlistedId(_id)) {
+            removeFromWishlist(_id);
+            toast.info("Removed from wishlist", { toastId: `wish-${_id}` });
+        } else {
+            addToWishlist(_id);
+        }
     };
-
-    const isWishlisted = useMemo(() => {
-        return wishlist?.includes(productData?._id);
-    }, [wishlist, productData]);
 
     // Integrated Share Logic
     const handleShare = () => {
@@ -34,7 +42,7 @@ export const Product = () => {
             navigator.share({
                 title: productData.title,
                 url: window.location.href,
-            }).catch(() => console.log('Error sharing'));
+            }).catch(() => { /* share sheet dismissed */ });
         } else {
             navigator.clipboard.writeText(window.location.href);
             Swal.fire({
@@ -48,7 +56,9 @@ export const Product = () => {
         }
     };
 
-    const handleAddToCart = (_id) => {
+    const handleAddToCart = async (_id) => {
+        if (isAdding) return;
+
         if (!user.isLoggedIn) {
             Swal.fire({
                 title: 'Login Required',
@@ -63,14 +73,25 @@ export const Product = () => {
             }).then((result) => {
                 if (result.isConfirmed) {
                     navigate("/login", {
-                        state: { redirectTo: "/cart" }
+                        state: { from: location, redirectTo: location.pathname + location.search }
                     });
                 }
             });
             return;
         }
 
-        addToCart(_id);
+        const available = getTotalStock(productData);
+        const inBag = cartItems?.[_id] || 0;
+        if (available <= 0) return;
+        if (inBag >= available) {
+            toast.info(`Only ${available} left in stock, and they're already in your bag`, { toastId: `cart-max-${_id}` });
+            return;
+        }
+
+        setIsAdding(true);
+        const added = await addToCart(_id);
+        setIsAdding(false);
+        if (!added) return;
 
         Swal.fire({
             icon: 'success',
@@ -189,7 +210,7 @@ export const Product = () => {
                 }
             });
 
-        } catch (err) {
+        } catch {
             Swal.fire({
                 title: 'Copy This Prompt',
                 input: 'textarea',
@@ -211,29 +232,66 @@ export const Product = () => {
     };
 
     useEffect(() => {
+        let cancelled = false;
+        setProductData(null);
+        setLoadError(null);
+        setMainImage('');
+
         const fetchProductData = async () => {
             try {
                 // Using the specific 'details' endpoint with the productId from useParams()
                 const response = await axios.get(`${backendUrl}/api/products/details/${productId}`);
+                if (cancelled) return;
 
-                if (response.data.success) {
+                if (response.data.success && response.data.product) {
                     const product = response.data.product;
                     setProductData(product);
-
-                    // Set the initial main image if images exist
-                    if (product.images && product.images.length > 0) {
-                        setMainImage(product.images[0]);
-                    }
+                    setMainImage(product.images?.[0] || product.thumbnail || '');
+                } else {
+                    setLoadError('notfound');
                 }
             } catch (error) {
-                console.error("Error fetching product details:", error);
+                if (cancelled) return;
+                const status = error.response?.status;
+                setLoadError(status === 404 || status === 400 ? 'notfound' : 'error');
+                if (status !== 404) console.error("Error fetching product details:", error);
             }
         };
 
         if (productId) {
             fetchProductData();
+        } else {
+            setLoadError('notfound');
         }
+        return () => { cancelled = true; };
     }, [productId, backendUrl]);
+
+    // Real ratings for this product (reviews are keyed by the product's _id, not the slug)
+    const productObjectId = productData?._id;
+    useEffect(() => {
+        if (!productObjectId) return;
+        let cancelled = false;
+        setReviewData({ reviews: [], totalReviews: 0, avgRating: 0 });
+        axios.get(`${backendUrl}/api/review/product/${productObjectId}`)
+            .then(({ data }) => {
+                if (cancelled || !data?.success) return;
+                setReviewData({
+                    reviews: data.reviews || [],
+                    totalReviews: data.totalReviews || 0,
+                    avgRating: Number(data.avgRating) || 0,
+                });
+            })
+            .catch((error) => console.error("Error fetching reviews:", error));
+        return () => { cancelled = true; };
+    }, [productObjectId, backendUrl]);
+
+    // Lock page scroll while the full-screen viewer is open, and always restore it
+    useEffect(() => {
+        if (!isViewerOpen) return;
+        const previous = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = previous; };
+    }, [isViewerOpen]);
 
     const handleScroll = () => {
         if (scrollRef.current) {
@@ -244,10 +302,28 @@ export const Product = () => {
     };
 
     const openViewer = (index) => {
-        setViewerIndex(index);
+        setViewerIndex(index < 0 ? 0 : index);
         setIsViewerOpen(true);
-        document.body.style.overflow = 'hidden';
     };
+
+    if (loadError) {
+        return (
+            <div className="mt-20 px-4 py-24 flex flex-col items-center justify-center text-center min-h-[50vh]">
+                <Gem size={40} className="text-(--color-gold) mb-4" aria-hidden="true" />
+                <h1 className="text-2xl sm:text-3xl font-semibold text-(--color-green) mb-2">
+                    {loadError === 'notfound' ? 'Product not found' : "We couldn't load this product"}
+                </h1>
+                <p className="text-gray-500 mb-8 max-w-md">
+                    {loadError === 'notfound'
+                        ? 'This piece may have sold out or is no longer available.'
+                        : 'Please check your connection and try again.'}
+                </p>
+                <Link to="/new-arrivals" className="px-8 py-3 bg-(--color-green) text-white rounded-full font-medium hover:bg-(--color-gold) transition-all">
+                    Explore New Arrivals
+                </Link>
+            </div>
+        );
+    }
 
     if (!productData) return <>
         <div className="bg-(--color-green)/1 lg:pb-20 lg:pt-10 mt-20 lg:mt-20 pt-5 px-4 pb-20 md:px-10 lg:px-15">
@@ -290,11 +366,20 @@ export const Product = () => {
                 </p>
             </div>
 
-        </div>;
+        </div>
     </>
-    const discountPercentage = productData.comparePrice
+    const discountPercentage = productData.comparePrice > productData.price
         ? Math.round(((productData.comparePrice - productData.price) / productData.comparePrice) * 100)
         : 0;
+
+    const images = productData.images?.length ? productData.images : [productData.thumbnail].filter(Boolean);
+    const totalStock = getTotalStock(productData);
+    const isSoldOut = totalStock <= 0;
+    const inBag = cartItems?.[productData._id] || 0;
+    const isBagFull = !isSoldOut && inBag >= totalStock;
+    const isWishlisted = isWishlistedId(productData._id);
+    const { avgRating, totalReviews, reviews } = reviewData;
+    const roundedRating = Math.round(avgRating);
 
     return (
         <div className="bg-white min-h-screen">
@@ -315,14 +400,20 @@ export const Product = () => {
                     <div className="w-full lg:w-1/2 flex flex-col gap-4">
                         <div className="block sm:hidden relative">
                             <div ref={scrollRef} onScroll={handleScroll} className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-lg">
-                                {productData.images.map((img, idx) => (
+                                {images.map((img, idx) => (
                                     <div key={idx} className="min-w-full snap-center aspect-square" onClick={() => openViewer(idx)}>
-                                        <img src={img} alt="" className="w-full h-full object-cover" />
+                                        <img
+                                            src={optimizeImage(img, 1000)}
+                                            alt={`${productData.title} - image ${idx + 1} of ${images.length}`}
+                                            loading={idx === 0 ? 'eager' : 'lazy'}
+                                            decoding="async"
+                                            className="w-full h-full object-cover"
+                                        />
                                     </div>
                                 ))}
                             </div>
                             <div className="flex justify-center gap-2 mt-4">
-                                {productData.images.map((_, idx) => (
+                                {images.map((_, idx) => (
                                     <div key={idx} className={`h-1.5 rounded-full transition-all duration-300 ${currentSlide === idx ? 'bg-zinc-800 w-6' : 'bg-gray-300 w-1.5'}`} />
                                 ))}
                             </div>
@@ -330,20 +421,22 @@ export const Product = () => {
 
                         <div className="hidden sm:flex flex-col gap-4">
                             <div className="relative group w-full max-h-130 overflow-hidden rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center">
-                                <img src={mainImage} alt={productData.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                <img src={optimizeImage(mainImage, 1000)} alt={`${productData.title} - main image`} decoding="async" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                 <div className="absolute inset-0 bg-linear-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-all duration-500 flex items-end justify-center pb-12">
                                     <div className="flex gap-4 translate-y-10 group-hover:translate-y-0 transition-transform duration-500">
                                         <button
                                             onClick={() => handleWishlistClick(productData._id)}
+                                            aria-label={isWishlisted ? 'Remove from wishlist' : 'Add to wishlist'}
+                                            aria-pressed={isWishlisted}
                                             className={`cursor-pointer p-4 rounded-full shadow-xl transition-all hover:bg-(--color-green) ${isWishlisted ? 'bg-red-50 text-red-500' : 'bg-white text-gray-900 hover:bg-(--color-green) hover:text-white'
                                                 }`}
                                         >
                                             <Heart size={20} fill={isWishlisted ? "currentColor" : "none"} />
                                         </button>
-                                        <button onClick={handleShare} className="cursor-pointer p-4 bg-white rounded-full shadow-xl hover:bg-(--color-green) hover:text-white transition-all hover:scale-110">
+                                        <button onClick={handleShare} aria-label="Share this product" className="cursor-pointer p-4 bg-white rounded-full shadow-xl hover:bg-(--color-green) hover:text-white transition-all hover:scale-110">
                                             <Share2 size={20} />
                                         </button>
-                                        <button onClick={() => openViewer(productData.images.indexOf(mainImage))} className="cursor-pointer p-4 bg-white rounded-full shadow-xl hover:bg-(--color-green) hover:text-white transition-all hover:scale-110">
+                                        <button onClick={() => openViewer(images.indexOf(mainImage))} aria-label="View full screen" className="cursor-pointer p-4 bg-white rounded-full shadow-xl hover:bg-(--color-green) hover:text-white transition-all hover:scale-110">
                                             <Eye size={20} />
                                         </button>
                                     </div>
@@ -351,9 +444,15 @@ export const Product = () => {
                             </div>
 
                             <div className="flex justify-center gap-3 py-2">
-                                {productData.images.map((img, idx) => (
+                                {images.map((img, idx) => (
                                     <div key={idx} onClick={() => setMainImage(img)} className={`cursor-pointer rounded-xl overflow-hidden border-2 transition-all w-20 h-20 shrink-0 ${mainImage === img ? 'border-zinc-900 shadow-md' : 'border-transparent bg-gray-50'}`}>
-                                        <img src={img} alt="thumbnail" className="w-full h-full object-cover" />
+                                        <img
+                                            src={optimizeImage(img, 200)}
+                                            alt={`${productData.title} - thumbnail ${idx + 1}`}
+                                            loading="lazy"
+                                            decoding="async"
+                                            className="w-full h-full object-cover"
+                                        />
                                     </div>
                                 ))}
                             </div>
@@ -364,12 +463,16 @@ export const Product = () => {
                     <div className="w-full lg:w-1/2 flex flex-col">
                         <div className="mb-4">
                             <h1 className="text-xl sm:text-4xl font-semibold text-gray-900 mb-4">{productData.title}</h1>
-                            <div className="flex items-center gap-3">
-                                <div className="flex text-amber-400">
-                                    <Star size={16} fill="currentColor" /><Star size={16} fill="currentColor" /><Star size={16} fill="currentColor" /><Star size={16} fill="currentColor" /><Star size={16} />
-                                </div>
-                                <span className="text-sm text-gray-400 font-medium">4.0 (122 Reviews)</span>
-                            </div>
+                            {totalReviews > 0 ? (
+                                <a href="#reviews" className="flex items-center gap-3 w-fit">
+                                    <StarRow rating={roundedRating} />
+                                    <span className="text-sm text-gray-400 font-medium hover:underline">
+                                        {avgRating.toFixed(1)} ({totalReviews} {totalReviews === 1 ? 'Review' : 'Reviews'})
+                                    </span>
+                                </a>
+                            ) : (
+                                <p className="text-sm text-gray-400 font-medium">No reviews yet</p>
+                            )}
                         </div>
 
                         <div className="flex items-center gap-4 mb-8">
@@ -390,20 +493,20 @@ export const Product = () => {
                         </div>
 
                         <div>
-                            {FomoStock(productData.variants.reduce((acc, variant) => acc + variant.stock, 0))}
+                            {FomoStock(totalStock)}
                         </div>
 
                         {/* Integrated Actions Section */}
                         <div className="flex flex-col gap-4">
                             <button
                                 onClick={() => handleAddToCart(productData._id)}
-                                disabled={productData.variants.reduce((acc, variant) => acc + variant.stock, 0) === 0}
-                                className={`w-full py-5 rounded-2xl font-bold uppercase tracking-widest transition-all shadow-lg ease-in-out duration-300 ${productData.variants.reduce((acc, variant) => acc + variant.stock, 0) === 0
+                                disabled={isSoldOut || isBagFull || isAdding}
+                                className={`w-full py-5 rounded-2xl font-bold uppercase tracking-widest transition-all shadow-lg ease-in-out duration-300 ${isSoldOut || isBagFull || isAdding
                                     ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                                     : "bg-(--color-green) hover:bg-(--color-gold) hover:brightness-110 active:scale-[0.98] text-white cursor-pointer"
                                     }`}
                             >
-                                {productData.variants.reduce((acc, variant) => acc + variant.stock, 0) === 0 ? "Out of Stock" : "Add to Bag"}
+                                {isSoldOut ? "Sold Out" : isBagFull ? "Max quantity in bag" : isAdding ? "Adding..." : "Add to Bag"}
                             </button>
                             <button
                                 onClick={handleTryOnRedirect}
@@ -416,6 +519,7 @@ export const Product = () => {
                             <div className="flex gap-4">
                                 <button
                                     onClick={() => handleWishlistClick(productData._id)}
+                                    aria-pressed={isWishlisted}
                                     className={`cursor-pointer flex-1 border-2 py-4 rounded-2xl font-bold uppercase tracking-widest transition-all active:scale-[0.98]  ease-in-out duration-400 flex items-center justify-center gap-2 ${isWishlisted
                                         ? 'border-red-200 bg-red-50 text-red-500'
                                         : 'border-(--color-green) text-zinc-900 hover:bg-(--color-gold) hover:text-white'
@@ -508,6 +612,45 @@ export const Product = () => {
                         )}
                     </div>
                 </div>
+
+                {/* --- Customer Reviews --- */}
+                <section id="reviews" className="mt-12 border-t border-gray-100 pt-10 scroll-mt-28">
+                    <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-900 mb-6">
+                        Customer Reviews {totalReviews > 0 && <span className="text-gray-400">({totalReviews})</span>}
+                    </h2>
+                    {totalReviews === 0 ? (
+                        <p className="text-sm text-gray-500">No reviews yet. Reviews come from verified buyers after delivery.</p>
+                    ) : (
+                        <ul className="space-y-6">
+                            {reviews.slice(0, 10).map((r) => {
+                                const name = [r.userId?.firstName, r.userId?.lastName?.[0] ? `${r.userId.lastName[0]}.` : '']
+                                    .filter(Boolean).join(' ') || 'Verified Buyer';
+                                return (
+                                    <li key={r._id} className="border-b border-gray-100 pb-6 last:border-none">
+                                        <div className="flex items-center justify-between gap-3 mb-2">
+                                            <div className="flex items-center gap-3">
+                                                <StarRow rating={r.rating} size={14} />
+                                                <span className="text-sm font-semibold text-gray-800">{name}</span>
+                                                {r.verified && <span className="text-[10px] font-bold uppercase tracking-wider text-green-700">Verified</span>}
+                                            </div>
+                                            {r.createdAt && <span className="text-xs text-gray-400">{new Date(r.createdAt).toLocaleDateString()}</span>}
+                                        </div>
+                                        <p className="text-sm text-gray-600 leading-relaxed">{r.review}</p>
+                                        {r.image && (
+                                            <img
+                                                src={optimizeImage(r.image, 200)}
+                                                alt={`Photo from ${name}'s review`}
+                                                loading="lazy"
+                                                decoding="async"
+                                                className="mt-3 w-20 h-20 object-cover rounded-lg border border-gray-100"
+                                            />
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
             </div>
 
             {/* --- FULLSCREEN IMAGE VIEWER --- */}
@@ -515,21 +658,32 @@ export const Product = () => {
                 <div className="fixed inset-0 z-50 bg-white flex flex-col items-center justify-center animate-fadeIn">
                     <div className="relative w-full h-full flex items-center justify-center p-4">
                         <img
-                            src={productData.images[viewerIndex]}
-                            alt="Product Image"
+                            src={images[viewerIndex]}
+                            alt={`${productData.title} - image ${viewerIndex + 1} of ${images.length}`}
                             className="max-w-full max-h-[75vh] object-contain select-none"
                         />
                     </div>
                     <div className="absolute bottom-8 flex items-center gap-6">
-                        <button onClick={() => setViewerIndex(prev => prev === 0 ? productData.images.length - 1 : prev - 1)} className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><ChevronLeft size={24} /></button>
-                        <button onClick={() => { setIsViewerOpen(false); document.body.style.overflow = 'unset'; }} className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><X size={24} /></button>
-                        <button onClick={() => setViewerIndex(prev => prev === productData.images.length - 1 ? 0 : prev + 1)} className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><ChevronRight size={24} /></button>
+                        <button onClick={() => setViewerIndex(prev => prev === 0 ? images.length - 1 : prev - 1)} aria-label="Previous image" className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><ChevronLeft size={24} /></button>
+                        <button onClick={() => setIsViewerOpen(false)} aria-label="Close viewer" className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><X size={24} /></button>
+                        <button onClick={() => setViewerIndex(prev => prev === images.length - 1 ? 0 : prev + 1)} aria-label="Next image" className="cursor-pointer w-14 h-14 bg-(--color-green) rounded-full flex items-center justify-center shadow-md text-white hover:bg-(--color-gold) transition"><ChevronRight size={24} /></button>
                     </div>
                 </div>
             )}
         </div>
     );
 };
+
+const getTotalStock = (product) =>
+    product?.variants?.reduce((acc, variant) => acc + (Number(variant.stock) || 0), 0) ?? 0;
+
+const StarRow = ({ rating, size = 16 }) => (
+    <div className="flex text-amber-400" aria-label={`${rating} out of 5 stars`}>
+        {[1, 2, 3, 4, 5].map((n) => (
+            <Star key={n} size={size} fill={n <= rating ? "currentColor" : "none"} aria-hidden="true" />
+        ))}
+    </div>
+);
 
 const HighlightItem = ({ icon, label, value }) => (
     <div className="p-4 rounded-2xl bg-green-50 border border-stone-200 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-4">

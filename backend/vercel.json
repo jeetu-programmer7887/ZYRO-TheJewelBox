@@ -11,5 +11,10 @@
       "src": "/(.*)",
       "dest": "server.js"
     }
+  ],
+  "crons": [
+    { "path": "/api/cron/order-status", "schedule": "30 0 * * *" },
+    { "path": "/api/cron/coin-expiry", "schedule": "0 1 * * *" },
+    { "path": "/api/cron/pending-payments", "schedule": "0 2 * * *" }
   ]
 }

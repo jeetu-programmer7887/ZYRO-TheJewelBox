@@ -2,10 +2,11 @@ import { useMemo, useContext, useState, useEffect, useRef } from 'react'
 import HeroSection from '../../Components/HeroSection'
 import Cards from '../../Components/Cards'
 import SkeletonCard from '../../Components/Skeleton'
+import { Link } from 'react-router-dom'
 import { ShopContext } from '../../config/ShopContext'
 
 const Rings = () => {
-  const { allProducts } = useContext(ShopContext);
+  const { allProducts, productsLoading } = useContext(ShopContext);
 
   const [visibleCount, setVisibleCount] = useState(12);
   const [isIncrementing, setIsIncrementing] = useState(false);
@@ -45,9 +46,9 @@ const Rings = () => {
   return (
     <>
       <HeroSection
-        bgImage="/images/RingHero.jpg"
+        bgImage="/images/RingHero.webp"
         title={"RINGS"}
-        subtitles={["Elevate Your Style with Every Dangle"]}
+        subtitles={["Elevate Your Style with Every Ring"]}
         topTitle={"60"}
         showTyping={true}
         showCursor={true}
@@ -71,7 +72,7 @@ const Rings = () => {
         <div className="text-center mt-20 mb-12 px-4">
           <p className="text-sm tracking-widest text-gray-400 title mb-3">BROWSE</p>
           <h1 className="text-4xl sm:text-5xl other text-(--color-gold) tracking-widest uppercase">
-            RingS COLLECTION
+            RINGS COLLECTION
           </h1>
         </div>
 
@@ -88,13 +89,17 @@ const Rings = () => {
                   image: item.thumbnail || item.images?.[0],
                   price: item.price,
                   originalPrice: item.comparePrice,
-                  variants: item.variants,
-                  discount: item.comparePrice ? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100) : 0
+                  variants: item.variants
                 }}
               />
             ))
-          ) : (
+          ) : productsLoading ? (
             Array.from({ length: 8 }).map((_, index) => <SkeletonCard key={index} />)
+          ) : (
+            <div className="col-span-full text-center py-16">
+              <p className="text-gray-500 para mb-4">No products in this collection yet.</p>
+              <Link to="/new-arrivals" className="text-(--color-green) underline">Explore our new arrivals</Link>
+            </div>
           )}
         </div>
 

@@ -1,12 +1,17 @@
 import productModel from "../models/productModel.js";
+import mongoose from "mongoose";
 import Groq from "groq-sdk";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// Public catalogue responses can be cached briefly by browsers and by the
+// CDN in front of the API; stale copies are served while a fresh one loads.
+const PUBLIC_CACHE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=600';
+
 //Gives all products list
 const listProducts = async (req, res) => {
   try {
-    const allProducts = await productModel.find({}).select({
+    const allProducts = await productModel.find({ isActive: { $ne: false } }).select({
       _id: 1,
       title: 1,
       slug: 1,
@@ -15,31 +20,31 @@ const listProducts = async (req, res) => {
       thumbnail: 1,
       category: 1,
       variants: 1,
+      averageRating: 1,
+      createdAt: 1,
       images: { $slice: 2 },
-    });
+    }).lean();
 
+    res.set('Cache-Control', PUBLIC_CACHE);
     return res.json({ success: true, allProducts });
   } catch (error) {
-    console.log("Product Listing Error : ", error);
-    return res.json({ success: false, message: error.message });
+    console.error("Product Listing Error:", error);
+    return res.status(500).json({ success: false, message: "Couldn't load products" });
   }
 };
 
-// To get all details of a single product by ID
+// To get all details of a single product by ID or slug
 const getProductDetails = async (req, res) => {
   try {
     const { id } = req.params;
-
-    let product = null;
-
-    const isValidObjectId = id.match(/^[0-9a-fA-F]{24}$/);
-    if (isValidObjectId) {
-      product = await productModel.findById(id);
+    if (typeof id !== "string" || id.length > 200) {
+      return res.status(400).json({ success: false, message: "Invalid product" });
     }
 
-    if (!product) {
-      product = await productModel.findOne({ slug: id });
-    }
+    const filter = mongoose.isValidObjectId(id) && /^[0-9a-fA-F]{24}$/.test(id)
+      ? { $or: [{ _id: id }, { slug: id }] }
+      : { slug: id };
+    const product = await productModel.findOne({ ...filter, isActive: { $ne: false } }).lean();
 
     if (!product) {
       return res.status(404).json({
@@ -48,15 +53,16 @@ const getProductDetails = async (req, res) => {
       });
     }
 
+    res.set('Cache-Control', PUBLIC_CACHE);
     return res.json({
       success: true,
       product,
     });
   } catch (error) {
-    console.log("Get Product Details Error:", error);
+    console.error("Get Product Details Error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Couldn't load this product",
     });
   }
 };
@@ -66,11 +72,17 @@ const analyzeImage = async (req, res) => {
   try {
     const { imageData, mediaType } = req.body;
 
-    if (!imageData || !mediaType) {
+    if (typeof imageData !== "string" || !imageData || typeof mediaType !== "string" || !mediaType) {
       return res.status(400).json({
         success: false,
         message: "imageData and mediaType are required",
       });
+    }
+    if (!/^image\/(jpeg|png|webp)$/.test(mediaType)) {
+      return res.status(400).json({ success: false, message: "Please upload a JPEG, PNG or WebP photo." });
+    }
+    if (imageData.length > 4 * 1024 * 1024 || !/^[A-Za-z0-9+/=\s]+$/.test(imageData.slice(0, 1000))) {
+      return res.status(400).json({ success: false, message: "This photo is too large or invalid. Please try a smaller one." });
     }
 
     const stylistPrompt = `You are a professional jewelry and fashion stylist.
@@ -233,25 +245,31 @@ const analyzeImage = async (req, res) => {
 //To get stock details
 const getStock = async (req, res) => {
   try {
-    const product = await productModel.findById(req.params.id);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid product" });
+    }
+    const product = await productModel.findById(req.params.id).select("variants").lean();
 
     if (!product) {
-      return res.status(404).json({ message: "Product not found" });
+      return res.status(404).json({ success: false, message: "Product not found" });
     }
 
     // Calculate total stock across all variants
-    const totalStock = product.variants.reduce(
-      (acc, variant) => acc + variant.stock,
+    const totalStock = (product.variants || []).reduce(
+      (acc, variant) => acc + Math.max(0, variant.stock || 0),
       0,
     );
 
+    res.set('Cache-Control', 'no-store');
     res.json({
+      success: true,
       count: totalStock,
       isLowStock: totalStock > 0 && totalStock < 10,
       outOfStock: totalStock === 0,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Get Stock Error:", error);
+    res.status(500).json({ success: false, message: "Couldn't check stock" });
   }
 };
 

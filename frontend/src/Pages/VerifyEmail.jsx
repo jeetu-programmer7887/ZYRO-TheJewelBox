@@ -4,6 +4,7 @@ import axios from "axios";
 import { toast } from "react-toastify";
 import { useContext } from "react";
 import { ShopContext } from "../config/ShopContext";
+import { completeLogin } from "../Utility/auth";
 
 const VerifyEmail = () => {
   const location = useLocation();
@@ -17,10 +18,33 @@ const VerifyEmail = () => {
   const [otp, setOtp] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
 
-  const [timer, setTimer] = useState(90);
-  const [isExpired, setIsExpired] = useState(false);
+  const [timer, setTimer] = useState(location.state?.needsResend ? 0 : 300);
+  const [isExpired, setIsExpired] = useState(!!location.state?.needsResend);
+  const [isResending, setIsResending] = useState(false);
+
+  // No email in navigation state (e.g. page refreshed): start over
+  useEffect(() => {
+    if (!email) navigate("/signup", { replace: true });
+  }, [email, navigate]);
+
+  const handleResend = async () => {
+    if (isResending) return;
+    setIsResending(true);
+    try {
+      const { data } = await axios.post(backendUrl + "/api/user/resend-otp", { email, purpose: "verify" });
+      toast.success(data.message || "A new code has been sent");
+      setOtp("");
+      setIsExpired(false);
+      setTimer(data.otpExpiresIn || 300);
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Couldn't resend the code");
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   const handleVerify = async () => {
+    if (isVerifying) return;
     setIsVerifying(true);
     try {
       const response = await axios.post(backendUrl + "/api/user/verify-email", {
@@ -30,33 +54,17 @@ const VerifyEmail = () => {
 
       if (response.data.success) {
         toast.success("Signup Successful! Enjoy Shopping");
-        localStorage.setItem("role", "user");
-        setUser({
-          username: response.data.username,
-          email: response.data.email,
-          isLoggedIn: true
-        });
-
-        setTimeout(() => {
-          window.location.href = '/';
-        }, 2000);
+        completeLogin({ role: "user", data: response.data, setUser, navigate, destination: "/" });
       }
     } catch (error) {
       const message = error.response?.data?.message || "Verification failed";
-
-      if (
-        message.includes("Incorrect otp, attempts left: 0") ||
-        message.includes("Too many attempts") ||
-        message.includes("OTP expired")
-      ) {
-        toast.error(message);
-
-        setTimeout(() => {
-          navigate("/signup");
-        }, 2000);
-      } else {
-        toast.error(message);
+      toast.error(message);
+      // Code burned or expired: let them request a new one right here
+      if (/expired|Too many/i.test(message)) {
+        setIsExpired(true);
+        setTimer(0);
       }
+      setOtp("");
     } finally {
       setIsVerifying(false);
     }
@@ -80,11 +88,6 @@ const VerifyEmail = () => {
   useEffect(() => {
     if (timer <= 0) {
       setIsExpired(true);
-      toast.error("OTP expired! Please sign up again.");
-
-      setTimeout(() => {
-        navigate("/signup");
-      }, 2000);
       return;
     }
 
@@ -111,9 +114,23 @@ const VerifyEmail = () => {
             <b className="text-(--color-gold) break-all">{email}</b>
           </p>
 
-          <p className="text-center text-red-600 text-lg font-semibold">
-            Time left: {timer}s
-          </p>
+          {isExpired ? (
+            <div className="text-center space-y-2">
+              <p className="text-red-600 text-sm font-semibold">This code has expired.</p>
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={isResending}
+                className="text-sm font-semibold text-(--color-green) underline underline-offset-4 disabled:opacity-50"
+              >
+                {isResending ? "Sending..." : "Send a new code"}
+              </button>
+            </div>
+          ) : (
+            <p className="text-center text-gray-600 text-sm font-semibold">
+              Code expires in {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
+            </p>
+          )}
 
           <div className="space-y-2">
             <label className="block text-sm font-semibold">Enter OTP</label>

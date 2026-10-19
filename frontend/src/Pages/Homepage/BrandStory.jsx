@@ -49,7 +49,7 @@ const BrandStory = () => {
         
         {/* ZYRO logo  */}
         <div className="image flex justify-end mb-6">
-        <img className='invert w-25 md:w-35 lg:w-45' src="./images/darkH.png" alt="" />
+        <img className='invert w-25 md:w-35 lg:w-45' src="/images/darkH.png" alt="" />
         </div>
         
         {/* Mobile and tablet layout  */}

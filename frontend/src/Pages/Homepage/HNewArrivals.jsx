@@ -1,16 +1,21 @@
-import React, { useEffect ,useRef ,useContext , useState} from 'react'
+import React, { useEffect ,useRef ,useContext } from 'react'
 import { NavLink } from 'react-router-dom'
 import { ShopContext } from '../../config/ShopContext'
 import { Link } from 'react-router-dom'
 import SkeletonCard from '../../Components/Skeleton'
+import { optimizeImage } from '../../Utility/image';
 
 
-const Cards = ({title,image,price,id,originalPrice,discount}) => ( 
+const Cards = ({title,image,price,id,originalPrice}) => {
+  // Only show a saving when the compare price is actually higher
+  const hasDiscount = Number(originalPrice) > Number(price);
+  const discount = hasDiscount ? Math.round(((originalPrice - price) / originalPrice) * 100) : 0;
+  return ( 
   
   
     <Link to={`/product/${id}`} className="newArrivalCard bg-white lg:h-[37vh] h-[30vh] sm:h-90 md:h-100 rounded-lg shadow-md flex flex-col transition-all duration-300 ease-out hover:-translate-y-2 hover:shadow-xl  hover:cursor-pointer">
         <div className="image flex-2 group rounded-t-lg  overflow-hidden">
-          <img className="h-full w-full object-cover group-hover:scale-[1.06] rounded-t-lg transition-transform duration-500 ease-out " src={image} alt=""
+          <img className="h-full w-full object-cover group-hover:scale-[1.06] rounded-t-lg transition-transform duration-500 ease-out " src={optimizeImage(image, 500)} alt={title} loading="lazy" decoding="async"
           />
         </div>
 
@@ -18,16 +23,17 @@ const Cards = ({title,image,price,id,originalPrice,discount}) => (
           <p className="text-sm px-2.5 text-gray-800 font-semibold line-clamp-2  truncate w-45">
            {title}
           </p>
-        <p className="text-gray-500 gap-2 flex text-sm text-center transition-all duration-300 "><span className=''>₹{price}</span><span className='text-green-600 font-bold'>SAVE {discount}%</span> </p>
+        <p className="text-gray-500 gap-2 flex text-sm text-center transition-all duration-300 "><span className=''>₹{price}</span>{hasDiscount && <span className='line-through text-gray-400'>₹{originalPrice}</span>}{discount > 0 && <span className='text-green-600 font-bold'>SAVE {discount}%</span>} </p>
         </div>
         </Link>  
-)
+  )
+}
 
 const HNewArrivals = () => {
   const maskRef = useRef(null);
   const sectionRef = useRef(null);
   const productRef = useRef(null);
-  const { newArrivals  } = useContext(ShopContext);
+  const { newArrivals, productsLoading } = useContext(ShopContext);
   
 
   useEffect(() => {
@@ -59,9 +65,11 @@ const HNewArrivals = () => {
           image={item.thumbnail}
           price= {item.price}
           originalPrice={item.comparePrice}
-          discount={ item.comparePrice? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100): 0 }
         />
       ))
+    }
+    if (!productsLoading) {
+      return <p className="col-span-full self-center text-center text-gray-500 para">New pieces are arriving soon.</p>
     }
     return Array.from({length:limit}).map((_,i)=> <SkeletonCard key={i}/>)
   }

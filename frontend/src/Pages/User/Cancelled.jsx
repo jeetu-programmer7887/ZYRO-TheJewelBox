@@ -1,7 +1,10 @@
-import React, { useEffect, useState, useContext } from 'react';
+import { useEffect, useState, useContext, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { NavLink } from 'react-router-dom';
+import { toast } from 'react-toastify';
 import { ShopContext } from '../../config/ShopContext';
+import { PaymentBadge, RefundNote } from '../../Components/orders/OrderParts';
+import { orderIdOf, shortOrderId, formatDate, formatMoney, apiMessage } from '../../Components/orders/orderFormat';
 
 const Cancelled = () => {
   const [cancelledOrders, setCancelledOrders] = useState([]);
@@ -9,42 +12,31 @@ const Cancelled = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const { currency, backendUrl } = useContext(ShopContext);
 
-  const fetchCancelledOrders = async () => {
-    if (cancelledOrders.length > 0) setIsRefreshing(true);
+  const loadedRef = useRef(false);
+
+  const fetchCancelledOrders = useCallback(async () => {
+    if (loadedRef.current) setIsRefreshing(true);
     else setLoading(true);
 
     try {
       const response = await axios.get(`${backendUrl}/api/order/userorders`);
-
       if (response.data.success) {
-        let onlyCancelled = [];
-        response.data.orders.forEach((order) => {
-          // Filter only the orders that are cancelled
-          if (order.status === "Cancelled") {
-            order.items.forEach((item) => {
-              onlyCancelled.push({
-                ...item,
-                orderId: order._id?.$oid || order._id,
-                status: order.status,
-                createdAt: order.createdAt?.$date || order.createdAt,
-                deliveryDate: order.deliveryDate
-              });
-            });
-          }
-        });
-        setCancelledOrders(onlyCancelled);
+        // OrderView[] from the server; this page only filters by status
+        setCancelledOrders((response.data.orders || []).filter((order) => order.status === "Cancelled"));
+        loadedRef.current = true;
       }
     } catch (error) {
       console.error("Fetch Error:", error);
+      toast.error(apiMessage(error, "Couldn't load your orders. Please try again."));
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [backendUrl]);
 
   useEffect(() => {
     fetchCancelledOrders();
-  }, []);
+  }, [fetchCancelledOrders]);
 
   return (
     <div className='bg-white lg:min-h-9/12 lg:mx-5 lg:mt-5 space-y-5 lg:p-5 border border-(--color-green)/20 shadow-2xl rounded-lg'>
@@ -103,48 +95,65 @@ const Cancelled = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {cancelledOrders.map((item, index) => {
-            const productId = item.productId?.$oid || item.productId;
+          {cancelledOrders.map((order) => {
+            const orderId = orderIdOf(order);
             return (
               <div
-                key={index}
-                className="p-4 bg-gray-50/30 rounded-xl border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-300 hover:border-red-200 hover:bg-white hover:shadow-xl group"
+                key={orderId}
+                className="p-4 bg-gray-50/30 rounded-xl border border-gray-100 flex flex-col md:flex-row md:items-start justify-between gap-4 transition-all duration-300 hover:border-red-200 hover:bg-white hover:shadow-xl group"
               >
-                <div className="flex gap-5">
-                  <NavLink to={`/product/${productId}`}>
-                    <img className='w-20 h-20 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform' src={item.image} alt={item.title} />
-                  </NavLink>
-
-                  <div className="flex flex-col justify-center">
-                    <NavLink to={`/product/${productId}`}>
-                      <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors">{item.title}</h3>
-                    </NavLink>
-                    <p className="text-sm text-gray-600">
-                      {currency}{item.price} • Quantity: {item.quantity}
-                    </p>
-
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
-                        Ordered: {new Date(item.createdAt).toLocaleDateString()}
-                      </span>
-                      <span className="text-[10px] font-medium border border-red-100 bg-red-50/50 px-2 py-0.5 rounded text-red-400">
-                        Status: Cancelled
-                      </span>
-                    </div>
+                <div className="flex-1 min-w-0 space-y-3">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="font-mono text-[11px] font-semibold text-(--color-green) bg-white border border-gray-100 px-2 py-0.5 rounded">#{shortOrderId(order)}</span>
+                    <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
+                      Ordered: {formatDate(order.createdAt)}
+                    </span>
+                    <span className="text-[10px] font-medium border border-red-100 bg-red-50/50 px-2 py-0.5 rounded text-red-400">
+                      Status: Cancelled
+                    </span>
+                    <PaymentBadge order={order} />
                   </div>
+
+                  {order.items.map((item, index) => {
+                    const productId = item.productId?.$oid || item.productId;
+                    return (
+                      <div key={`${productId}_${index}`} className="flex gap-5 items-center">
+                        <NavLink to={`/product/${productId}`}>
+                          <img className='w-20 h-20 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform' src={item.image} alt={item.title} />
+                        </NavLink>
+                        <div className="flex flex-col justify-center min-w-0">
+                          <NavLink to={`/product/${productId}`}>
+                            <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors">{item.title}</h3>
+                          </NavLink>
+                          <p className="text-sm text-gray-600">
+                            {formatMoney(currency, item.price)} • Quantity: {item.quantity}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {order.cancelReason && (
+                    <div className="text-[11px] px-2 py-1 rounded-lg w-fit border text-red-600 bg-red-50 border-red-100">
+                      📝 Reason: <span className="font-semibold">{order.cancelReason}</span>
+                    </div>
+                  )}
+                  <RefundNote order={order} currency={currency} />
                 </div>
 
-                <div className="flex items-center justify-between md:w-1/4 border-t md:border-t-0 pt-4 md:pt-0">
+                <div className="flex md:flex-col items-center md:items-end justify-between gap-3 md:w-1/4 border-t md:border-t-0 pt-4 md:pt-0">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]" />
                     <span className="text-sm font-semibold text-gray-700">Cancelled</span>
                   </div>
-
-                  <NavLink to={`/product/${productId}`}>
-                    <button className="cursor-pointer px-4 py-2 text-xs text-(--color-green) font-bold border border-(--color-green)/30 rounded hover:bg-(--color-green) hover:text-white transition-all duration-500 active:scale-95  shadow-sm">
-                      REORDER
-                    </button>
-                  </NavLink>
+                  <p className="text-sm font-bold text-(--color-green)">{formatMoney(currency, order.pricing?.total ?? order.amount)}</p>
+                  {order.items[0] && (
+                    <NavLink to={`/product/${order.items[0].productId?.$oid || order.items[0].productId}`}>
+                      <button className="cursor-pointer px-4 py-2 text-xs text-(--color-green) font-bold border border-(--color-green)/30 rounded hover:bg-(--color-green) hover:text-white transition-all duration-500 active:scale-95  shadow-sm">
+                        REORDER
+                      </button>
+                    </NavLink>
+                  )}
                 </div>
               </div>
             );

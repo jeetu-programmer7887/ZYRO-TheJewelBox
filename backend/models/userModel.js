@@ -16,6 +16,12 @@ const userSchema = new mongoose.Schema({
   verificationAttempts: { type: Number, default: 0 },
   otpExpiry: { type: Date },
 
+  otpSentAt: { type: Date },
+  resetTokenHash: { type: String, default: null },
+  resetTokenExp: { type: Date, default: null },
+  // Bumped on password reset to invalidate every existing session
+  tokenVersion: { type: Number, default: 0 },
+
   verificationExpireAt: { type: Date, expires: 0 },
   isGoogleAuth: { type: Boolean, default: false },
   googleId: { type: String, default: null },
@@ -37,8 +43,10 @@ const userSchema = new mongoose.Schema({
     date:{type:Date,default:Date.now}
   }]
 
+}, { timestamps: true });
 
-});
+// Coin expiry cron looks up users by expiring history entries
+userSchema.index({ 'coinsHistory.expiresAt': 1 });
 
 const userModel = mongoose.models.user || mongoose.model("user", userSchema);
 

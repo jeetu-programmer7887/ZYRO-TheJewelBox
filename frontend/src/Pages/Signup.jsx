@@ -1,12 +1,14 @@
-import { useState, useContext, useEffect } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useState, useContext } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import axios from "axios";
 import { useGoogleLogin } from "@react-oauth/google";
 import { ShopContext } from "../config/ShopContext";
+import { completeLogin, getRedirectTarget } from "../Utility/auth";
 
 const Signup = () => {
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Get backend URL from environment variables
   const backendUrl = import.meta.env.VITE_BACKEND_URL; 
@@ -37,6 +39,13 @@ const Signup = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isLoading) return;
+    if (!formData.fname.trim() || !formData.lname.trim()) {
+      return toast.error("Please enter your first and last name");
+    }
+    if (formData.password.length < 8 || !/[A-Za-z]/.test(formData.password) || !/\d/.test(formData.password)) {
+      return toast.error("Password must be at least 8 characters with a letter and a number");
+    }
     setIsLoading(true);
 
     try {
@@ -65,35 +74,20 @@ const Signup = () => {
   const signupGoogle = useGoogleLogin({
     onSuccess: async (res) => {
       try {
-        // Step 1: Get User Info from Google
-        const userInfoResponse = await axios.get(
-          "https://www.googleapis.com/oauth2/v3/userinfo",
-          {
-            headers: { Authorization: `Bearer ${res.access_token}` },
-            withCredentials: false,
-          }
-        );
-        const userInfo = userInfoResponse.data;
-
-        // Step 2: Register/Login with your backend
+        // The backend verifies this token with Google itself
         const response = await axios.post(backendUrl + "/api/user/google", {
-            firstName: userInfo.given_name,
-            lastName: userInfo.family_name,
-            email: userInfo.email,
-            googleId: userInfo.sub, // 'sub' is the unique Google ID
+          accessToken: res.access_token,
         });
-        
+
         if (response.data.success) {
           toast.success("Signup Successful! Enjoy Shopping");
-          setUser({
-            username: response.data.username,
-            email : response.data.email,
-            isLoggedIn: true,
+          completeLogin({
+            role: "user",
+            data: response.data,
+            setUser,
+            navigate,
+            destination: getRedirectTarget(location, "/"),
           });
-
-          setTimeout(() => {
-            navigate("/");
-          }, 2000);
         }
       } catch (error) {
         if (error.response?.data?.message) {
@@ -187,6 +181,9 @@ const Signup = () => {
               name="lname"
               value={formData.lname}
               onChange={handleChange}
+              required
+              maxLength={50}
+              autoComplete="family-name"
               disabled={isLoading}
               className="w-full border text-sm border-gray-300 p-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-(--color-gold)"
             />

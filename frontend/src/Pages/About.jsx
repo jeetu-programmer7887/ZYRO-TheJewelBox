@@ -103,7 +103,7 @@ const About = () => {
 
           <div className="team-card">
             <img
-              src="/images/partner2.png"
+              src="/images/partner2.webp"
               className="rounded-full w-32 h-32 md:w-40 md:h-40 mx-auto object-cover"
               alt="Mayuri Pasi"
             />

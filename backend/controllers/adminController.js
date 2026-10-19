@@ -1,102 +1,13 @@
-import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import productModel from "../models/productModel.js";
 import orderModel from "../models/orderModel.js";
 import userModel from "../models/userModel.js";
 import fs from "fs";
 import axios from "axios";
+import validator from "validator";
 import { v2 as cloudinary } from "cloudinary";
-import sendOrderEmail from '../middleware/sendOrderEmail.js';
-
-const getRandomCoins = () => Math.floor(Math.random() * 6) + 5;
-
-const addCoins = async (userId, coins, orderId) => {
-  const expiresAt = new Date();
-  expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-  await userModel.findByIdAndUpdate(userId, {
-    $inc: {
-      coinsPresent: coins,
-      coinsEarned: coins,
-    },
-    $push: {
-      coinsHistory: {
-        type: "earned",
-        coins,
-        reason: `Earned for delivered order`,
-        orderId,
-        expiresAt,
-      },
-    },
-  });
-};
-
-const deductCoins = async (userId, coins, reason, orderId) => {
-  await userModel.findByIdAndUpdate(userId, {
-    $inc: {
-      coinsPresent: -coins,
-      coinsDeducted: coins, // track lifetime deducted
-    },
-    $push: {
-      coinsHistory: {
-        type: "deducted",
-        coins,
-        reason,
-        orderId,
-      },
-    },
-  });
-};
-
-const verifyAdmin = (req, res) => {
-  const OTP = req.cookies.OTP;
-  const userOTP = req.body.otp;
-  const email = req.body.email;
-
-  if (!OTP) {
-    return res.status(401).json({ success: false, message: "OTP NOT FOUND" });
-  }
-
-  const decoded_otp = jwt.verify(OTP, process.env.JWT_SECRET);
-
-  if (decoded_otp.OTP !== userOTP) {
-    return res.status(403).json({ success: false, message: "Invalid OTP" });
-  }
-
-  if (decoded_otp !== userOTP) {
-    const token = jwt.sign(
-      { id: process.env.ADMIN_EMAIL + process.env.ADMIN_PASSWORD },
-      process.env.JWT_SECRET,
-    );
-
-    // Clear the cookies
-    res.clearCookie("OTP", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    return res.json({
-      success: true,
-      isAdmin: true,
-      isVerified: true,
-      message: "Admin Logged In",
-      email: email,
-    });
-  } else {
-    return res.json({
-      success: false,
-      isVerified: false,
-      message: "Invalid Credential",
-    });
-  }
-};
+import { transitionOrder, OrderTransitionError, refundOrder } from "../services/orderLifecycle.js";
+import { clearAuthCookie, asEmail, asString } from "../utils/security.js";
 
 const getAdminDetails = (req, res) => {
   res.json({
@@ -108,34 +19,18 @@ const getAdminDetails = (req, res) => {
 };
 
 const logoutAdmin = (req, res) => {
-  try {
-    // Clear the cookie
-    res.clearCookie("token", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Admin Logged out.",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Error during logout",
-    });
-  }
+  clearAuthCookie(res);
+  return res.status(200).json({ success: true, message: "Admin Logged out." });
 };
 
 const removeProduct = async (req, res) => {
   try {
     const prodId = req.params.id;
 
-    if (!prodId) {
+    if (!mongoose.isValidObjectId(prodId)) {
       return res
         .status(400)
-        .json({ success: false, message: "Product ID is required" });
+        .json({ success: false, message: "Invalid product ID" });
     }
 
     const removedItem = await productModel.findByIdAndDelete(prodId);
@@ -159,8 +54,8 @@ const removeProduct = async (req, res) => {
 
 const getOrders = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
     const skip = (page - 1) * limit;
 
     // 1. Fetch Paginated Orders (Showing all, including cancelled, for the list)
@@ -169,13 +64,14 @@ const getOrders = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("userId", "firstName lastName email");
+      .populate("userId", "firstName lastName email")
+      .lean();
 
     // 2. Calculate Global Stats (Filtering out Cancelled orders)
     const globalStats = await orderModel.aggregate([
       {
         // STAGE 1: Only look at active/completed orders for revenue and order counts
-        $match: { status: { $ne: "Cancelled" } },
+        $match: { status: { $nin: ["Cancelled", "Pending Payment", "Returned"] } },
       },
       {
         $group: {
@@ -212,7 +108,7 @@ const getOrders = async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch Orders Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: "Couldn't load orders" });
   }
 };
 
@@ -220,146 +116,63 @@ const updateOrderStatus = async (req, res) => {
   try {
     const { orderId, status } = req.body;
 
-    // ── 1. FETCH & VALIDATE ORDER 
-    const existingOrder = await orderModel.findById(orderId);
-    if (!existingOrder) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+    if (!mongoose.isValidObjectId(orderId) || typeof status !== "string") {
+      return res.status(400).json({ success: false, message: "Invalid request" });
+    }
+    if (status === "Return Requested" || status === "Pending Payment") {
+      return res.status(400).json({ success: false, message: "This status is set automatically" });
     }
 
-    if (existingOrder.status === "Cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Order is already cancelled and cannot be modified",
-      });
-    }
+    const updatedOrder = await transitionOrder(orderId, status);
 
-    if (existingOrder.status === "Returned") {
-      return res.status(400).json({
-        success: false,
-        message: "Returned orders cannot be modified",
-      });
-    }
-
-    // ── 2. RETURN GUARD — must have been requested first ─
-    if (status === "Returned" && existingOrder.status !== "Return Requested") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot approve return — customer has not requested a return yet",
-      });
-    }
-
-    // ── 3. BUILD UPDATE FIELDS
-    const updateFields = { status };
-
-    if (status === "Delivered") {
-      updateFields.deliveryDate = new Date();
-      updateFields.payment = true;
-    }
-
+    let message = `Status updated to ${status} successfully`;
+    if (status === "Delivered") message = "Order delivered and coins awarded";
+    if (status === "Returned") message = "Order returned, stock restored, and coins adjusted";
     if (status === "Cancelled") {
-      updateFields.payment = false;
+      message = updatedOrder.refundStatus === "pending"
+        ? "Order cancelled. The online payment is marked for refund."
+        : "Order cancelled and stock restored";
     }
 
-    // ── 4. SIDE EFFECTS BEFORE SAVING
-
-    // Cancelled — restore stock
-    if (status === "Cancelled") {
-      for (const item of existingOrder.items) {
-        const product = await productModel.findById(item.productId);
-        if (!product) continue;
-        if (item.variantSku === "Standard") {
-          product.variants[0].stock += item.quantity;
-        } else {
-          const variant = product.variants.find((v) => v.sku === item.variantSku);
-          if (variant) variant.stock += item.quantity;
-        }
-        await product.save();
-      }
-    }
-
-    // Returned — deduct coins earned from this order + restore stock
-    if (status === "Returned") {
-      // Deduct coins if they were awarded
-      if (existingOrder.coinsAwarded && existingOrder.coinsEarned > 0) {
-        const user = await userModel
-          .findById(existingOrder.userId)
-          .select("coinsPresent");
-        const coinsToDeduct = Math.min(existingOrder.coinsEarned, user.coinsPresent);
-        if (coinsToDeduct > 0) {
-          await deductCoins(
-            existingOrder.userId,
-            coinsToDeduct,
-            `Coins deducted for returned order`,
-            orderId,
-          );
-        }
-      }
-
-      // Restore stock on return
-      for (const item of existingOrder.items) {
-        const product = await productModel.findById(item.productId);
-        if (!product) continue;
-        if (item.variantSku === "Standard") {
-          product.variants[0].stock += item.quantity;
-        } else {
-          const variant = product.variants.find((v) => v.sku === item.variantSku);
-          if (variant) variant.stock += item.quantity;
-        }
-        await product.save();
-      }
-    }
-
-    // ── 5. PERSIST STATUS UPDATE 
-    const updatedOrder = await orderModel.findByIdAndUpdate(
-      orderId,
-      updateFields,
-      { new: true, runValidators: true },
-    );
-
-    if (!updatedOrder) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
-
-    // ── 6. AWARD COINS ON DELIVERY (once only) 
-    if (status === "Delivered" && !existingOrder.coinsAwarded) {
-      const coinsToAdd = getRandomCoins();
-      await addCoins(updatedOrder.userId, coinsToAdd, orderId);
-      await orderModel.findByIdAndUpdate(orderId, {
-        coinsAwarded: true,
-        coinsEarned: coinsToAdd,
-      });
-    }
-
-    // ── 7. SEND EMAIL NOTIFICATION 
-    const notifyStatuses = ["Cancelled", "Returned", "Delivered", "Out for delivery"];
-    if (notifyStatuses.includes(status)) {
-      try {
-        await sendOrderEmail(updatedOrder.address.email, updatedOrder);
-      } catch (emailError) {
-        console.error("Email failed to send, but order was updated:", emailError);
-      }
-    }
-
-    // ── 8. RESPOND
-    return res.status(200).json({
-      success: true,
-      message:
-        status === "Delivered"
-          ? "Order delivered, payment confirmed, and coins awarded"
-          : status === "Returned"
-            ? "Order returned, stock restored, and coins deducted"
-            : status === "Cancelled"
-              ? "Order cancelled and stock restored"
-              : `Status updated to ${status} successfully`,
-      order: updatedOrder,
-    });
-
+    return res.status(200).json({ success: true, message, order: updatedOrder });
   } catch (error) {
+    if (error instanceof OrderTransitionError) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
     console.error("Error in updating order status:", error);
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Internal server error",
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Retry a refund that failed at the gateway (or was never started)
+const retryRefund = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    if (!mongoose.isValidObjectId(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid order" });
+    }
+    const order = await orderModel.findById(orderId).lean();
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (order.paymentMethod !== "Razorpay" || !order.payment) {
+      return res.status(400).json({ success: false, message: "Only paid online orders can be refunded here" });
+    }
+    if (!["Cancelled", "Returned"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: "Cancel or return the order before refunding it" });
+    }
+    if (order.refundStatus === "processed" || order.refundStatus === "pending") {
+      return res.status(409).json({ success: false, message: `Refund is already ${order.refundStatus}` });
+    }
+
+    const updated = await refundOrder(orderId, "Refund retried by admin");
+    const ok = updated?.refundStatus === "processed" || updated?.refundStatus === "pending";
+    return res.status(ok ? 200 : 502).json({
+      success: ok,
+      message: ok ? "Refund initiated" : `Refund failed: ${updated?.refundError || "gateway error"}`,
+      order: updated,
     });
+  } catch (error) {
+    console.error("Retry Refund Error:", error);
+    return res.status(500).json({ success: false, message: "Couldn't retry the refund" });
   }
 };
 
@@ -521,45 +334,56 @@ const addProduct = async (req, res) => {
 const editProduct = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid product ID" });
+    }
 
-    const {
-      title,
-      brand,
-      category,
-      description,
-      tags,
-      material,
-      plating,
-      price,
-      comparePrice,
-      isAntiTarnish,
-      featured,
-      isActive,
-      variants,
-      images,
-      thumbnail,
-    } = req.body;
+    const body = req.body || {};
+    const update = {};
+    for (const field of ["title", "brand", "category", "description", "material", "plating", "thumbnail"]) {
+      if (typeof body[field] === "string") update[field] = body[field].trim();
+    }
+    for (const field of ["isAntiTarnish", "featured", "isActive"]) {
+      if (body[field] !== undefined) update[field] = body[field] === true || body[field] === "true";
+    }
+    if (body.price !== undefined) {
+      const price = Number(body.price);
+      if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ success: false, message: "Price must be a positive number" });
+      }
+      update.price = price;
+    }
+    if (body.comparePrice !== undefined && body.comparePrice !== "" && body.comparePrice !== null) {
+      const comparePrice = Number(body.comparePrice);
+      if (!Number.isFinite(comparePrice) || comparePrice < 0) {
+        return res.status(400).json({ success: false, message: "Compare price must be a number" });
+      }
+      update.comparePrice = comparePrice;
+    }
+    if (Array.isArray(body.tags)) update.tags = body.tags.filter((t) => typeof t === "string");
+    if (Array.isArray(body.images)) update.images = body.images.filter((u) => typeof u === "string");
+    if (Array.isArray(body.variants)) {
+      const variants = body.variants
+        .filter((v) => v && typeof v.sku === "string" && v.sku.trim())
+        .map((v) => ({
+          ...(v._id ? { _id: v._id } : {}),
+          color: typeof v.color === "string" ? v.color : "",
+          sku: v.sku.trim(),
+          stock: Math.max(0, Math.floor(Number(v.stock) || 0)),
+        }));
+      if (!variants.length) {
+        return res.status(400).json({ success: false, message: "At least one variant with a SKU is required" });
+      }
+      update.variants = variants;
+    }
+    if (update.title === "") {
+      return res.status(400).json({ success: false, message: "Title is required" });
+    }
 
+    // The slug is part of product URLs, so it is never regenerated on edit.
     const updatedProduct = await productModel.findByIdAndUpdate(
       id,
-      {
-        title,
-        brand,
-        category,
-        description,
-        tags,
-        material,
-        plating,
-        isAntiTarnish,
-        featured,
-        isActive,
-        price: Number(price),
-        comparePrice: Number(comparePrice),
-        variants,
-        images,
-        thumbnail,
-        slug: title.toLowerCase().split(" ").join("-") + "-" + Date.now(),
-      },
+      { $set: update },
       { new: true, runValidators: true },
     );
 
@@ -572,7 +396,10 @@ const editProduct = async (req, res) => {
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error) {
     console.error("Backend Edit Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ success: false, message: "Some product fields are invalid" });
+    }
+    res.status(500).json({ success: false, message: "Couldn't update the product" });
   }
 };
 
@@ -584,7 +411,8 @@ const getDashboardStats = async (req, res) => {
     if (range === "today") {
       startDate.setHours(0, 0, 0, 0);
     } else {
-      startDate.setDate(startDate.getDate() - (parseInt(range) || 30));
+      const days = Math.min(365, Math.max(1, parseInt(range) || 30));
+      startDate.setDate(startDate.getDate() - days);
     }
 
     // 1. KPIs (Filtered by range)
@@ -592,7 +420,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       {
@@ -630,7 +458,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       {
@@ -648,7 +476,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       { $unwind: "$items" },
@@ -670,13 +498,16 @@ const getDashboardStats = async (req, res) => {
       .find({})
       .sort({ createdAt: -1 })
       .limit(5)
-      .populate("userId", "firstName lastName email");
+      .populate("userId", "firstName lastName email")
+      .lean();
 
     // 8. NEW: Export Data (All orders in range - No Limit)
     const exportDataPromise = orderModel
       .find({ createdAt: { $gte: startDate } })
       .sort({ createdAt: -1 })
-      .populate("userId", "firstName lastName email");
+      .limit(5000)
+      .populate("userId", "firstName lastName email")
+      .lean();
 
     const [
       stats,
@@ -727,8 +558,11 @@ const exportOrdersData = async (req, res) => {
   try {
     const orders = await orderModel
       .find({})
+      .select("userId amount status paymentMethod createdAt")
       .populate("userId", "firstName lastName email")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(10000)
+      .lean();
 
     const flatData = orders.map((order) => ({
       orderId: order._id,
@@ -742,18 +576,27 @@ const exportOrdersData = async (req, res) => {
 
     res.json({ success: true, data: flatData });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Export Orders Error:", error);
+    res.status(500).json({ success: false, message: "Couldn't export orders" });
   }
 };
 
 const contactUs = async (req, res) => {
   try {
-    const { name, email, subject, message } = req.body;
+    const rawName = asString(req.body.name, { max: 100 });
+    const email = asEmail(req.body.email);
+    const rawSubject = asString(req.body.subject, { max: 200 });
+    const rawMessage = asString(req.body.message, { max: 5000 });
 
     // 1. Validation — now includes subject
-    if (!name || !email || !subject || !message) {
-      return res.status(400).json({ success: false, message: "Missing required fields." });
+    if (!rawName || !email || !rawSubject || !rawMessage) {
+      return res.status(400).json({ success: false, message: "Please fill in all fields with a valid email." });
     }
+
+    // Customer input goes into an HTML email, so escape it
+    const name = validator.escape(rawName);
+    const subject = validator.escape(rawSubject);
+    const message = validator.escape(rawMessage);
 
     const api_key = process.env.BREVO_API_KEY;
     const Brevo_url = "https://api.brevo.com/v3/smtp/email";
@@ -762,8 +605,8 @@ const contactUs = async (req, res) => {
     const emailData = {
       sender: { name: "ZYRO Contact Request", email: process.env.ADMIN_EMAIL },
       to: [{ email: "zyrojewellery9395@gmail.com" }],
-      replyTo: { email: email, name: name },
-      subject: `NEW INQUIRY: ${subject}`,
+      replyTo: { email: email, name: rawName },
+      subject: `NEW INQUIRY: ${rawSubject.replace(/[\r\n]+/g, " ")}`,
       htmlContent: `
         <div style="font-family: Arial, sans-serif; border: 1px solid #2e4a3e; padding: 25px; border-radius: 20px; color: #2e4a3e;">
           <h2 style="color: #c6a664; border-bottom: 1px solid #eee; padding-bottom: 10px;">New Message from ZYRO Website</h2>
@@ -783,6 +626,7 @@ const contactUs = async (req, res) => {
         "Content-Type": "application/json",
         "api-key": api_key,
       },
+      timeout: 10000,
     });
 
     res.status(200).json({ success: true, message: "Inquiry forwarded to admin." });
@@ -794,9 +638,9 @@ const contactUs = async (req, res) => {
 };
 
 export {
+  retryRefund,
   logoutAdmin,
   getAdminDetails,
-  verifyAdmin,
   removeProduct,
   getOrders,
   updateOrderStatus,
