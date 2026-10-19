@@ -4,6 +4,7 @@ import { toast } from "react-toastify";
 import { useGoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import { ShopContext } from "../config/ShopContext";
+import { completeLogin, getRedirectTarget } from "../Utility/auth";
 
 const Login = () => {
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
@@ -16,7 +17,7 @@ const Login = () => {
   const [showPassword, setshowPassword] = useState(false);
   const [isOtpSent, setIsOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
-  const [timeLeft, setTimeLeft] = useState(90); 
+  const [timeLeft, setTimeLeft] = useState(300);
 
   const [formData, setFormData] = useState({
     email: "",
@@ -34,7 +35,7 @@ const Login = () => {
       // Logic when timer expires
       toast.error("OTP expired. Please login again.");
       setIsOtpSent(false);
-      setTimeLeft(90);
+      setTimeLeft(300);
       setOtp("");
     }
 
@@ -61,6 +62,7 @@ const Login = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isLoading) return;
     setIsLoading(true);
 
     try {
@@ -75,15 +77,13 @@ const Login = () => {
         if (data.isAdmin) {
           if (data.password) {
             toast.info("Verification code sent to your admin email.");
-            setTimeLeft(90);
+            setTimeLeft(300);
             setIsOtpSent(true);
           } else {
             toast.error(data.message);
           }
         } else if (data.success) {
-          localStorage.setItem("role", "user");
-          setUser({ username: data.username, email: data.email, isLoggedIn: true });
-          callSuccessToast(data.message);
+          callSuccessToast(data.message, "user", data);
         }
       } else {
         const response = await axios.post(backendUrl + "/api/admin/verify", {
@@ -94,58 +94,49 @@ const Login = () => {
         const { data } = response;
 
         if (data.success) {
-          localStorage.setItem("role", "admin");
-          setUser({ username: "ADMIN PANEL", email: formData.email, isLoggedIn: true });
-          callSuccessToast("Admin Verified Successfully", "/admin");
+          callSuccessToast("Admin Verified Successfully", "admin", { username: "ADMIN PANEL", email: data.email }, "/admin");
         }
       }
     } catch (error) {
-      toast.error(error.response?.data?.message || "Something went wrong");
+      const data = error.response?.data;
+      if (data?.needsVerification) {
+        toast.info(data.message);
+        navigate("/verify-email", { state: { email: formData.email, needsResend: true } });
+        return;
+      }
+      toast.error(data?.message || "Something went wrong. Please check your connection and try again.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const callSuccessToast = (message, targetLocation) => {
+  const callSuccessToast = (message, role, data, targetLocation) => {
     toast.success(message || "Login Successful!", {
       position: "top-right",
       autoClose: 1000,
       theme: "light",
     });
 
-
-    setTimeout(() => {
-      const destination = location.state?.redirectTo || targetLocation || "/";
-      window.location.href = destination;
-    }, 1500);
+    const destination = role === "admin" ? (targetLocation || "/admin") : getRedirectTarget(location, "/");
+    completeLogin({ role, data, setUser, navigate, destination });
   };
 
   const loginGoogle = useGoogleLogin({
     onSuccess: async (res) => {
       try {
-        const userInfoResponse = await axios.get(
-          "https://www.googleapis.com/oauth2/v3/userinfo",
-          { headers: { Authorization: `Bearer ${res.access_token}` }, withCredentials: false }
-        );
-        const userInfo = userInfoResponse.data;
-
+        // The backend verifies this token with Google itself
         const response = await axios.post(backendUrl + "/api/user/google", {
-          firstName: userInfo.given_name,
-          lastName: userInfo.family_name,
-          email: userInfo.email,
-          isGoogleAuth: true,
-          googleId: userInfo.sub,
+          accessToken: res.access_token,
         });
 
         if (response.data.success) {
-          localStorage.setItem("role", "user");
-          setUser({ username: response.data.username, email: response.data.email, isLoggedIn: true });
-          callSuccessToast();
+          callSuccessToast(response.data.message, "user", response.data);
         }
       } catch (error) {
-        toast.error("Failed to sign in with Google");
+        toast.error(error.response?.data?.message || "Failed to sign in with Google");
       }
     },
+    onError: () => toast.error("Google sign-in was cancelled or failed"),
   });
 
   return (

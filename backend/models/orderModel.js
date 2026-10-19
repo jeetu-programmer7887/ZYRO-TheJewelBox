@@ -38,6 +38,9 @@ const orderSchema = new mongoose.Schema({
 
   paymentMethod: { type: String, required: true },
   payment: { type: Boolean, default: false },
+  // Set to "pending" when a paid online order is cancelled; the payment
+  // integration moves it to "processed" / "failed".
+  refundStatus: { type: String, enum: ['none', 'pending', 'processed', 'failed'], default: 'none' },
   expireAt: { type: Date, index: { expires: '10m' } },
 
   coinsAwarded: { type: Boolean, default: false },
@@ -45,6 +48,10 @@ const orderSchema = new mongoose.Schema({
   coinsRedeemed: { type: Number, default: 0 },
 
 }, { timestamps: true });
+
+orderSchema.index({ userId: 1, createdAt: -1 });   // customer order history
+orderSchema.index({ createdAt: -1 });              // admin list, dashboard ranges
+orderSchema.index({ status: 1, createdAt: -1 });   // status cron, dashboard
 
 const orderModel = mongoose.models.order || mongoose.model('order', orderSchema);
 

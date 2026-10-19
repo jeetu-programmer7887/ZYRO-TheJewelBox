@@ -1,70 +1,86 @@
-import { StrictMode, useContext } from 'react'
+import { StrictMode, Suspense, lazy, useContext } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { GoogleOAuthProvider } from '@react-oauth/google'
 import { ToastContainer } from 'react-toastify'
 import axios from 'axios'
 
-// ── Core ──
+// ── Core (eager: needed for the first paint of every page) ──
 import './index.css'
 import ShopContextProvider, { ShopContext } from './config/ShopContext.jsx'
 import PageRouting from './Layouts/PageRouting.jsx'
 import { GuestRoute, ProtectedRoute, AdminRoute } from './Layouts/RouteGuards.jsx'
-
-// ── Pages ──
 import App from './App.jsx'
-import About from './Pages/About.jsx'
-import Contact from './Pages/Contact.jsx'
-import Login from './Pages/Login.jsx'
-import Signup from './Pages/Signup.jsx'
-import Cart from './Pages/Cart.jsx'
-import Wishlist from './Pages/Wishlist.jsx'
-import Search from './Pages/Search.jsx'
-import NewArrivals from './Pages/NewArrivals.jsx'
-import PlaceOrder from './Pages/placeOrder.jsx'
-import AiStylistStudio from './Pages/AiStylistStudio.jsx'
+
+// ── Pages (lazy: each route downloads its own chunk on first visit) ──
+const About = lazy(() => import('./Pages/About.jsx'))
+const Contact = lazy(() => import('./Pages/Contact.jsx'))
+const Login = lazy(() => import('./Pages/Login.jsx'))
+const Signup = lazy(() => import('./Pages/Signup.jsx'))
+const Cart = lazy(() => import('./Pages/Cart.jsx'))
+const Wishlist = lazy(() => import('./Pages/Wishlist.jsx'))
+const Search = lazy(() => import('./Pages/Search.jsx'))
+const NewArrivals = lazy(() => import('./Pages/NewArrivals.jsx'))
+const PlaceOrder = lazy(() => import('./Pages/placeOrder.jsx'))
+const AiStylistStudio = lazy(() => import('./Pages/AiStylistStudio.jsx'))
 
 // ── Auth Pages ──
-import VerifyEmail from './Pages/VerifyEmail.jsx'
-import ForgotPassword from './Pages/ForgotPassword.jsx'
-import ResetPassword from './Pages/ResetPassword.jsx'
+const VerifyEmail = lazy(() => import('./Pages/VerifyEmail.jsx'))
+const ForgotPassword = lazy(() => import('./Pages/ForgotPassword.jsx'))
+const ResetPassword = lazy(() => import('./Pages/ResetPassword.jsx'))
 
 // ── Policy Pages ──
-import FAQ from './Pages/FAQ.jsx'
-import ReturnPolicy from './Pages/ReturnPolicy.jsx'
-import PrivacyPolicy from './Pages/PrivacyPolicy.jsx'
-import ShippingPolicy from './Pages/ShippingPolicy.jsx'
+const FAQ = lazy(() => import('./Pages/FAQ.jsx'))
+const ReturnPolicy = lazy(() => import('./Pages/ReturnPolicy.jsx'))
+const PrivacyPolicy = lazy(() => import('./Pages/PrivacyPolicy.jsx'))
+const ShippingPolicy = lazy(() => import('./Pages/ShippingPolicy.jsx'))
 
 // ── Category Pages ──
-import Earrings from './Pages/Categories/Earrings.jsx'
-import Necklaces from './Pages/Categories/Necklace.jsx'
-import Bracelets from './Pages/Categories/Bracelets.jsx'
-import Rings from './Pages/Categories/Rings.jsx'
-import { Product } from './Pages/Categories/Product.jsx'
+const Earrings = lazy(() => import('./Pages/Categories/Earrings.jsx'))
+const Necklaces = lazy(() => import('./Pages/Categories/Necklace.jsx'))
+const Bracelets = lazy(() => import('./Pages/Categories/Bracelets.jsx'))
+const Rings = lazy(() => import('./Pages/Categories/Rings.jsx'))
+const Product = lazy(() => import('./Pages/Categories/Product.jsx').then(m => ({ default: m.Product })))
 
 // ── User Account Pages ──
-import UserAccountLayout from './Pages/User/UserAccountLayout.jsx'
-import Profile from './Pages/User/Profile.jsx'
-import Order from './Pages/User/Order.jsx'
-import Cancelled from './Pages/User/Cancelled.jsx'
-import Returns from './Pages/User/Returns.jsx'
-import Coins from './Pages/User/Coins.jsx'
+const UserAccountLayout = lazy(() => import('./Pages/User/UserAccountLayout.jsx'))
+const Profile = lazy(() => import('./Pages/User/Profile.jsx'))
+const Order = lazy(() => import('./Pages/User/Order.jsx'))
+const Cancelled = lazy(() => import('./Pages/User/Cancelled.jsx'))
+const Returns = lazy(() => import('./Pages/User/Returns.jsx'))
+const Coins = lazy(() => import('./Pages/User/Coins.jsx'))
 
 // ── Admin Pages ──
-import AdminPanel from './Admin/AdminPanel.jsx'
-import AdminDashboard from './Admin/AdminDashboard.jsx'
-import AdminOrders from './Admin/AdminOrders.jsx'
-import AddProduct from './Admin/AddProduct.jsx'
-import ListProducts from './Admin/ListProducts.jsx'
-import AdminEditProduct from './Admin/AdminEditProduct.jsx'
+const AdminPanel = lazy(() => import('./Admin/AdminPanel.jsx'))
+const AdminDashboard = lazy(() => import('./Admin/AdminDashboard.jsx'))
+const AdminOrders = lazy(() => import('./Admin/AdminOrders.jsx'))
+const AddProduct = lazy(() => import('./Admin/AddProduct.jsx'))
+const ListProducts = lazy(() => import('./Admin/ListProducts.jsx'))
+const AdminEditProduct = lazy(() => import('./Admin/AdminEditProduct.jsx'))
+const AdminReviews = lazy(() => import('./Admin/AdminReviews.jsx'))
 
 // ── Components ──
-import ChatWidget from './Components/ChatWidget.jsx'
-import AdminReviews from './Admin/AdminReviews.jsx'
-import NotFound from './Pages/NotFound.jsx'
+const ChatWidget = lazy(() => import('./Components/ChatWidget.jsx'))
+const NotFound = lazy(() => import('./Pages/NotFound.jsx'))
 
 // ── Config ──
 axios.defaults.withCredentials = true
+axios.defaults.timeout = 30000
+
+// After a new deploy, an open tab can request page chunks whose hashed
+// filenames no longer exist. Reload once to pick up the new build instead
+// of leaving the customer on a broken page.
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  try {
+    if (sessionStorage.getItem('chunk-reload')) return
+    sessionStorage.setItem('chunk-reload', '1')
+  } catch { /* storage unavailable: still try one reload */ }
+  window.location.reload()
+})
+window.addEventListener('load', () => {
+  try { sessionStorage.removeItem('chunk-reload') } catch { /* ignore */ }
+})
 const CLIENT_ID = import.meta.env.VITE_OAUTH_CLIENT_ID
 
 // ── Route Definitions ──
@@ -81,7 +97,6 @@ const router = createBrowserRouter([
       { path: 'new-arrivals',       element: <NewArrivals /> },
       { path: 'ai-stylist',         element: <AiStylistStudio /> },
       { path: 'product/:productId', element: <Product /> },
-      { path: 'place-order',        element: <PlaceOrder /> },
 
       // Cart & Wishlist
       { path: 'cart',               element: <Cart /> },
@@ -94,8 +109,18 @@ const router = createBrowserRouter([
           { path: 'login',           element: <Login /> },
           { path: 'signup',          element: <Signup /> },
           { path: 'verify-email',    element: <VerifyEmail /> },
-          { path: 'forgot-password', element: <ForgotPassword /> },
-          { path: 'reset-password',  element: <ResetPassword /> },
+        ],
+      },
+
+      // Password reset (also used by logged-in users to change their password)
+      { path: 'forgot-password',    element: <ForgotPassword /> },
+      { path: 'reset-password',     element: <ResetPassword /> },
+
+      // Checkout (requires login)
+      {
+        element: <ProtectedRoute />,
+        children: [
+          { path: 'place-order',    element: <PlaceOrder /> },
         ],
       },
 
@@ -162,7 +187,11 @@ const router = createBrowserRouter([
 // eslint-disable-next-line react-refresh/only-export-components
 const ZYROChatSupport = () => {
   const { backendUrl } = useContext(ShopContext)
-  return <ChatWidget backendUrl={backendUrl} />
+  return (
+    <Suspense fallback={null}>
+      <ChatWidget backendUrl={backendUrl} />
+    </Suspense>
+  )
 }
 
 // ── App Entry Point ──

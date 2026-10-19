@@ -1,12 +1,21 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext, useEffect, useMemo, useRef } from 'react';
 import { ShopContext } from '../config/ShopContext';
 import axios from 'axios';
 import { toast } from 'react-toastify';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import confetti from 'canvas-confetti';
-import { Loader2, MapPin } from 'lucide-react';
+import { Loader2, MapPin, ShieldCheck, Lock } from 'lucide-react';
 
-const Inputfield = ({ label, name, value, type, placeholder, handleChange, disabled, maxLength, children }) => (
+const PHONE_RE = /^[6-9]\d{9}$/;
+const PINCODE_RE = /^\d{6}$/;
+// Sent to the backend as a number of days; shown to the customer as a range.
+const DELIVERY_DAYS = 5;
+const DELIVERY_LABEL = '3–5 Business Days';
+
+const getAvailableStock = (item) =>
+  item?.variants?.reduce((acc, v) => acc + (Number(v.stock) || 0), 0) ?? 0;
+
+const Inputfield = ({ label, name, value, type, placeholder, handleChange, disabled, readOnly, maxLength, inputMode, children }) => (
   <div className="flex flex-col w-full relative">
     <label htmlFor={name} className="mb-1 para text-(--color-gold) font-bold text-xs uppercase tracking-tight">{label}</label>
     <div className="relative">
@@ -17,10 +26,12 @@ const Inputfield = ({ label, name, value, type, placeholder, handleChange, disab
         value={value}
         placeholder={placeholder}
         onChange={handleChange}
-        required
+        required={!readOnly}
         disabled={disabled}
+        readOnly={readOnly}
         maxLength={maxLength}
-        className={`w-full border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-1 focus:ring-(--color-gold) py-2 px-3 bg-white transition-all text-sm ${disabled ? 'bg-gray-50 opacity-70' : ''}`}
+        inputMode={inputMode}
+        className={`w-full border border-gray-200 rounded-lg text-gray-600 focus:outline-none focus:ring-1 focus:ring-(--color-gold) py-2 px-3 bg-white transition-all text-sm ${disabled || readOnly ? 'bg-gray-50 opacity-70' : ''}`}
         />
         {children}
     </div>
@@ -28,7 +39,7 @@ const Inputfield = ({ label, name, value, type, placeholder, handleChange, disab
 );
 
 const PlaceOrder = () => {
-  const { cartData, setCartItems, currency, user } = useContext(ShopContext);
+  const { cartData, setCartItems, currency, user, productsLoading, cartLoading } = useContext(ShopContext);
   const navigate = useNavigate();
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
@@ -43,11 +54,17 @@ const PlaceOrder = () => {
   const [redeemCoins, setRedeemCoins] = useState(false);
 
   const [formData, setFormData] = useState({
-    mobile: user?.mobile || '',
+    mobile: user?.mobile ? String(user.mobile) : '',
     pincode: '', firstName: user?.firstName || '', lastName: user?.lastName || '',
     flatHouse: '', areaStreet: '', city: '', state: '',
     email: user?.email || '', addressType: 'Home',
   });
+
+  // Cart lines that can't be fulfilled (sold out, or more than we have in stock)
+  const stockIssues = useMemo(() => cartData.filter(item => {
+    const available = getAvailableStock(item);
+    return available <= 0 || item.quantity > available;
+  }), [cartData]);
 
   const subtotal = cartData.reduce((acc, item) => acc + (item.price * item.quantity), 0);
   const delivery_fee = subtotal < 500 ? 50 : 0;
@@ -65,45 +82,83 @@ const PlaceOrder = () => {
       try {
         const { data } = await axios.get(backendUrl + '/api/order/fetch-coins', { withCredentials: true });
         if (data.success) setUserCoins(data.coins);
-      } catch (err) { console.log("Coins fetch error:", err); }
+      } catch (err) { console.error("Coins fetch error:", err); }
     };
     if (user?.isLoggedIn) fetchCoins();
   }, [user?.isLoggedIn, backendUrl]); 
 
-  useEffect(() => { if (user?.mobile) setStep(2); }, [user]);
+  // User details usually arrive after the first render: fill in only the
+  // fields the customer hasn't typed into yet.
+  useEffect(() => {
+    if (!user?.isLoggedIn) return;
+    setFormData(prev => ({
+      ...prev,
+      mobile: prev.mobile || (user.mobile ? String(user.mobile) : ''),
+      firstName: prev.firstName || user.firstName || '',
+      lastName: prev.lastName || user.lastName || '',
+      email: prev.email || user.email || '',
+    }));
+  }, [user]);
+
+  // Skip the contact step once, but only when the saved mobile number is valid.
+  const autoAdvanced = useRef(false);
+  useEffect(() => {
+    if (autoAdvanced.current || step !== 1) return;
+    const profileMobile = user?.mobile ? String(user.mobile) : '';
+    if (profileMobile && formData.mobile === profileMobile && PHONE_RE.test(formData.mobile)) {
+      autoAdvanced.current = true;
+      setStep(2);
+    }
+  }, [user?.mobile, formData.mobile, step]);
 
   useEffect(() => {
+    const cleanPincode = formData.pincode.toString().trim();
+    if (!PINCODE_RE.test(cleanPincode)) return;
+
+    let cancelled = false;
     const fetchLocation = async () => {
-      const cleanPincode = formData.pincode.toString().trim();
-      if (cleanPincode.length === 6) {
-        setIsFetching(true);
-        try {
-          const response = await axios.get(`https://api.postalpincode.in/pincode/${cleanPincode}`, { withCredentials: false });
-          if (response.data && response.data[0].Status === "Success") {
-            const postOffice = response.data[0].PostOffice[0];
-
-            if (formData.city !== postOffice.District) {
-              setFormData(prev => ({ ...prev, city: postOffice.District, state: postOffice.State }));
-              toast.success(`District Found: ${postOffice.District}`, { toastId: 'pincode-success' });
-            }
-
-            setDeliveryDate(Math.floor(Math.random() * (5 - 3 + 1)) + 3);
-          } else {
-            setDeliveryDate(null);
-            toast.error("Pincode not serviceable");
-          }
-        } catch (error) {
-          toast.error("Failed to auto-fetch city/state");
-        } finally {
-          setIsFetching(false);
+      setIsFetching(true);
+      try {
+        const response = await axios.get(`https://api.postalpincode.in/pincode/${cleanPincode}`, { withCredentials: false });
+        if (cancelled) return;
+        if (response.data && response.data[0]?.Status === "Success") {
+          const postOffice = response.data[0].PostOffice[0];
+          setFormData(prev => ({ ...prev, city: postOffice.District, state: postOffice.State }));
+          toast.success(`District Found: ${postOffice.District}`, { toastId: 'pincode-success' });
+          setDeliveryDate(DELIVERY_DAYS);
+        } else {
+          setDeliveryDate(null);
+          toast.error("We couldn't find this pincode. Please check it and try again.", { toastId: 'pincode-error' });
         }
+      } catch {
+        if (!cancelled) toast.error("Couldn't verify this pincode. Please try again.", { toastId: 'pincode-error' });
+      } finally {
+        if (!cancelled) setIsFetching(false);
       }
     };
     fetchLocation();
+    return () => {
+      cancelled = true;
+      setIsFetching(false);
+    };
   }, [formData.pincode]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+
+    if (name === 'mobile' || name === 'pincode') {
+      const digits = value.replace(/\D/g, '').slice(0, name === 'pincode' ? 6 : 10);
+      if (digits === formData[name]) return;
+      if (name === 'pincode') {
+        // A new pincode invalidates the previously resolved district/state.
+        setDeliveryDate(null);
+        setFormData(prev => ({ ...prev, pincode: digits, city: '', state: '' }));
+      } else {
+        setFormData(prev => ({ ...prev, mobile: digits }));
+      }
+      return;
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -140,8 +195,11 @@ const PlaceOrder = () => {
             setCartItems({});
             fireConfetti();
             setIsOrdered(true);
+          } else {
+            toast.error(data.message || "Payment verification failed");
+            setIsSubmitting(false);
           }
-        } catch (error) { 
+        } catch { 
             toast.error("Payment verification failed"); 
             setIsSubmitting(false);
         }
@@ -154,10 +212,25 @@ const PlaceOrder = () => {
 
   const onSubmitHandler = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (step === 1) {
-      const phoneRegex = /^[6-9]\d{9}$/;
-      if (!phoneRegex.test(formData.mobile)) return toast.error("Please enter a valid mobile number");
+      if (!PHONE_RE.test(formData.mobile)) return toast.error("Please enter a valid 10-digit mobile number");
       setStep(2); return;
+    }
+
+    if (!PHONE_RE.test(formData.mobile)) {
+      setStep(1);
+      return toast.error("Please enter a valid 10-digit mobile number");
+    }
+    if (!PINCODE_RE.test(formData.pincode)) return toast.error("Please enter a valid 6-digit pincode");
+    if (isFetching) return toast.info("Verifying your pincode, please wait a moment");
+    if (!formData.city || !formData.state || !deliveryDate) {
+      return toast.error("We couldn't verify your pincode. Please re-enter a valid pincode.");
+    }
+    if (cartData.length === 0) return toast.error("Your bag is empty");
+    if (stockIssues.length > 0) {
+      return toast.error("Some items in your bag are out of stock or exceed available quantity. Please update your bag.", { toastId: 'checkout-stock' });
     }
 
     setIsSubmitting(true);
@@ -233,6 +306,19 @@ const PlaceOrder = () => {
     );
   }
 
+  // Nothing to check out (cart emptied, or every product became unavailable)
+  if (!productsLoading && !cartLoading && cartData.length === 0) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-25 text-center">
+        <div className={`${cardStyle} py-12 px-8 flex flex-col items-center`}>
+          <h1 className="text-2xl font-semibold text-(--color-green) title mb-2">Your bag is empty</h1>
+          <p className="text-gray-500 para mb-8">Add a piece you love to your bag before checking out.</p>
+          <Link to="/cart" className="px-8 py-3 bg-(--color-green) text-white title rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-(--color-gold) transition-all">Go to Bag</Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className='max-w-6xl mx-auto px-4 lg:px-0 py-25'>
       <form onSubmit={onSubmitHandler} className='grid grid-cols-1 lg:grid-cols-13 gap-6 items-start'>
@@ -244,7 +330,7 @@ const PlaceOrder = () => {
             </div>
             {step === 1 ? (
               <div className="max-w-sm">
-                <Inputfield label="Mobile Number" name="mobile" type="tel" value={formData.mobile} placeholder="Enter 10-digit mobile number" handleChange={handleChange} maxLength={10} />
+                <Inputfield label="Mobile Number" name="mobile" type="tel" inputMode="numeric" value={formData.mobile} placeholder="Enter 10-digit mobile number" handleChange={handleChange} maxLength={10} />
                 <button type="submit" className="mt-4 px-6 py-2.5 bg-(--color-green) text-white title rounded-lg hover:bg-(--color-gold) transition-all text-sm cursor-pointer">Continue</button>
               </div>
             ) : <p className="text-sm text-gray-500 font-medium">Contact No: <span className="text-gray-800">{formData.mobile}</span></p>}
@@ -258,7 +344,7 @@ const PlaceOrder = () => {
                   
                   {/* Added isFetching Spinner to Pincode field */}
                   <div className="md:col-span-1 max-w-xs relative">
-                    <Inputfield label="Pincode" name="pincode" value={formData.pincode} type="text" placeholder="e.g. 400001" handleChange={handleChange}>
+                    <Inputfield label="Pincode" name="pincode" value={formData.pincode} type="text" inputMode="numeric" maxLength={6} placeholder="e.g. 400001" handleChange={handleChange}>
                         {isFetching && (
                             <div className="absolute right-3 top-2 flex items-center h-full">
                                 <Loader2 className="animate-spin text-(--color-gold)" size={16} />
@@ -272,8 +358,8 @@ const PlaceOrder = () => {
                   <Inputfield label="Last Name" name="lastName" value={formData.lastName} type="text" placeholder="Enter your last name" handleChange={handleChange} />
                   <div className="md:col-span-2"><Inputfield label="Flat / House / Building" name="flatHouse" value={formData.flatHouse} type="text" placeholder="House No., Building Name, etc." handleChange={handleChange} /></div>
                   <div className="md:col-span-2"><Inputfield label="Area / Street / Sector" name="areaStreet" value={formData.areaStreet} type="text" placeholder="Area, Colony, Street Name" handleChange={handleChange} /></div>
-                  <Inputfield label="District" name="city" value={formData.city} type="text" placeholder="District" handleChange={handleChange} disabled={true} />
-                  <Inputfield label="State/UT" name="state" value={formData.state} type="text" placeholder="State" handleChange={handleChange} disabled={true} />
+                  <Inputfield label="District" name="city" value={formData.city} type="text" placeholder="Auto-filled from pincode" handleChange={handleChange} readOnly />
+                  <Inputfield label="State/UT" name="state" value={formData.state} type="text" placeholder="Auto-filled from pincode" handleChange={handleChange} readOnly />
                 </div>
               </div>
               
@@ -345,7 +431,7 @@ const PlaceOrder = () => {
                   <span>✨ Applied Discount</span><span>-{currency}{coinDiscount}</span>
                 </div>
               )}
-              {deliveryDate && <div className='flex items-center gap-2 text-[12px] text-gray-500 bg-gray-50 p-2 rounded-lg border border-gray-100'>🚚 Delivers in <span className='font-bold text-gray-700'>{deliveryDate} Business Days</span></div>}
+              {deliveryDate && <div className='flex items-center gap-2 text-[12px] text-gray-500 bg-gray-50 p-2 rounded-lg border border-gray-100'>🚚 Delivers in <span className='font-bold text-gray-700'>{DELIVERY_LABEL}</span></div>}
               <div className='flex justify-between text-lg font-black pt-4 border-t-2 border-double border-gray-200 text-(--color-green) title'>
                 <span>Total Amount</span>
                 <div className="text-right">
@@ -354,6 +440,23 @@ const PlaceOrder = () => {
                 </div>
               </div>
             </div>
+
+            {stockIssues.length > 0 && (
+              <div className="mt-6 bg-red-50 border border-red-200 p-3 rounded-lg text-red-700 text-xs space-y-1">
+                <p className="font-bold">Some items can't be ordered right now:</p>
+                <ul className="list-disc pl-4">
+                  {stockIssues.map(item => {
+                    const available = getAvailableStock(item);
+                    return (
+                      <li key={item._id}>
+                        {item.title} — {available <= 0 ? 'out of stock' : `only ${available} left`}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <Link to="/cart" className="inline-block font-bold underline mt-1">Update your bag</Link>
+              </div>
+            )}
 
             {step === 2 && (
               <div className="mt-6 space-y-4">
@@ -374,15 +477,19 @@ const PlaceOrder = () => {
                   {isSubmitting ? (
                     <>
                       <Loader2 className="animate-spin" size={18} />
-                      Processing Order...
+                      Processing...
                     </>
                   ) : (
-                    "Confirm & Pay Now"
+                    method === 'cod' ? "Place Order" : "Pay Now"
                   )}
                 </button>
               </div>
             )}
-            <div className="pt-6 flex flex-col items-center"><img src='https://prao.com/cdn/shop/files/IMG_1796.jpg' alt="secure" className="w-full mix-blend-multiply opacity-80" /></div>
+            <div className="pt-6 flex items-center justify-center gap-2 text-xs text-gray-500 para">
+              <ShieldCheck size={16} className="text-(--color-green)" aria-hidden="true" />
+              <span>100% secure checkout</span>
+              <Lock size={12} className="text-gray-400" aria-hidden="true" />
+            </div>
           </div>
         </div>
       </form>

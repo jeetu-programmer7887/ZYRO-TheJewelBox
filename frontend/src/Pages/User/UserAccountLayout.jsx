@@ -6,7 +6,8 @@ const UserAccount = () => {
   const { user } = useContext(ShopContext);
   const navigate = useNavigate();
   const location = useLocation();
-  const getUsername = user?.username || `${user.firstName + " " + user.lastName}`
+  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
+  const displayName = fullName || user?.username || user?.email || "My Account";
 
   
   const [isOpen, setIsOpen] = useState(false);
@@ -44,7 +45,7 @@ const UserAccount = () => {
       <div className="hidden lg:flex flex-col lg:w-1/4 border-r bg-(--color-lightgreen) border-gray-400">
         <div className="name py-9 px-10 xl:px-20 border-b border-gray-400">
           <h1 className="text-2xl font-bold text-(--color-gold) truncate tracking-tight">
-            {user?.firstName + " " + user?.lastName}
+            {displayName}
           </h1>
           <p className="text-gray-500 text-sm truncate mt-1 font-normal">{user?.email}</p>
         </div>
@@ -62,7 +63,7 @@ const UserAccount = () => {
         <div className="flex flex-col items-center justify-center pt-10 pb-6 px-5 text-center">
           {/* Bold text, original casing */}
           <h1 className="text-3xl font-bold text-(--color-gold) tracking-tight">
-            {user?.getUsername}
+            {displayName}
           </h1>
           {/* Standard font, no cursive/italics */}
           <p className="text-gray-500 text-sm mt-1 font-normal">

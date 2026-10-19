@@ -1,21 +1,22 @@
 import { useContext } from 'react'
 import HeroSection from '../Components/HeroSection'
+import { Link } from 'react-router-dom'
 import { ShopContext } from '../config/ShopContext'
 import SkeletonCard from '../Components/Skeleton'
 import Cards from '../Components/Cards'
 
 const NewArrivals = () => {
-  const { newArrivals } = useContext(ShopContext);
+  const { newArrivals, productsLoading } = useContext(ShopContext);
 
   return (
     <>
       <div className="relative">
         <HeroSection
-          bgImage="./images/Banner.jpg"
+          bgImage="/images/Banner.webp"
           title={"NEW ARRIVALS"}
-          subtitles={["Elevate Your Living Space.",
-            "Discovery Our Newest Treasures.",
-            "Crafted for the Modern Home."]}
+          subtitles={["Fresh Pieces, Just Arrived.",
+            "Discover Our Newest Treasures.",
+            "Crafted to Be Worn Every Day."]}
           topTitle={"60"}
           showTyping={true}
           showCursor={true}
@@ -45,17 +46,19 @@ const NewArrivals = () => {
                 image: item.thumbnail || item.images?.[0],
                 price: item.price,
                 variants: item.variants,
-                originalPrice: item.comparePrice,
-                discount: item.comparePrice
-                  ? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100)
-                  : 0
+                originalPrice: item.comparePrice
               }}
             />
           ))
-        ) : (
+        ) : productsLoading ? (
           Array.from({ length: 8 }).map((_, index) => (
             <SkeletonCard key={index} />
           ))
+        ) : (
+          <div className="col-span-full text-center py-16">
+            <p className="text-gray-500 para mb-4">No products in this collection yet.</p>
+            <Link to="/" className="text-(--color-green) underline">Back to home</Link>
+          </div>
         )}
       </div>
     </>

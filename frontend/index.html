@@ -2,14 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/diamond.png" />
+    <link rel="icon" type="image/png" href="/diamond.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script src="https://cdn.lordicon.com/lordicon.js"></script>
+    <meta name="description" content="ZYRO Fashion Jewellery - anti-tarnish earrings, necklaces, bracelets and rings. Elegant, lightweight, everyday luxury delivered across India." />
+    <meta name="theme-color" content="#2e4a3e" />
+    <meta property="og:title" content="ZYRO Fashion Jewellery" />
+    <meta property="og:description" content="Elegant, affordable anti-tarnish jewellery delivered across India." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/images/img1.webp" />
     <title>ZYRO Fashion Jewellery</title>
+
+    <!-- Warm up connections to third-party origins used on first paint -->
+    <link rel="preconnect" href="https://cdn.lordicon.com" crossorigin />
+    <link rel="preconnect" href="https://res.cloudinary.com" />
+    <!-- Home hero image: start downloading it before the JS bundle runs -->
+    <link rel="preload" as="image" href="/images/img1.webp" type="image/webp" fetchpriority="high" />
+
+    <!-- Third-party scripts must never block the first render -->
+    <script defer src="https://cdn.lordicon.com/lordicon.js"></script>
   </head>
   <body>
+    <noscript>Please enable JavaScript to shop at ZYRO.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script async src="https://checkout.razorpay.com/v1/checkout.js"></script>
   </body>
 </html>

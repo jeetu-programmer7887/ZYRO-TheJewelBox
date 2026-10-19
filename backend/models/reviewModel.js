@@ -14,5 +14,8 @@ const reviewSchema = new mongoose.Schema({
 // One review per user per product per order
 reviewSchema.index({ userId: 1, productId: 1, orderId: 1 }, { unique: true });
 
+reviewSchema.index({ productId: 1, createdAt: -1 });
+reviewSchema.index({ featured: 1, verified: 1, createdAt: -1 });
+
 const reviewModel = mongoose.models.review || mongoose.model('review', reviewSchema);
 export default reviewModel;

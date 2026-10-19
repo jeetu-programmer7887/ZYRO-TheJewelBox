@@ -9,7 +9,7 @@ import AiSection from "./Homepage/AiSection";
 function Home() {
   return (
     <>
-      <HeroSection bgImage={"/images/img1.jpg"}
+      <HeroSection bgImage={"/images/img1.webp"}
         title={"Embrace YourSelf With The Beauty Of Crystals"}
         subtitles={[
           "Where Elegance Meets Affordability 💍",

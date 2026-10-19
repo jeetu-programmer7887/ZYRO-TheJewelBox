@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authAdmin } from '../middleware/authAdmin.js';
-import { addProduct, editProduct, getAdminDetails, getOrders, logoutAdmin, removeProduct, updateOrderStatus, verifyAdmin,
+import { verifyAdmin } from '../controllers/userController.js';
+import { addProduct, editProduct, getAdminDetails, getOrders, logoutAdmin, removeProduct, updateOrderStatus,
     getDashboardStats, exportOrdersData, contactUs
  } from '../controllers/adminController.js';
 import upload from '../middleware/multer.js';

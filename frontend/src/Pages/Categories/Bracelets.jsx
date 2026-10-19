@@ -2,10 +2,11 @@ import { useMemo, useContext, useState, useEffect, useRef } from 'react'
 import HeroSection from '../../Components/HeroSection'
 import Cards from '../../Components/Cards'
 import SkeletonCard from '../../Components/Skeleton'
+import { Link } from 'react-router-dom'
 import { ShopContext } from '../../config/ShopContext'
 
 const Bracelets = () => {
-  const { allProducts } = useContext(ShopContext);
+  const { allProducts, productsLoading } = useContext(ShopContext);
 
   const [visibleCount, setVisibleCount] = useState(12);
   const [isIncrementing, setIsIncrementing] = useState(false);
@@ -45,7 +46,7 @@ const Bracelets = () => {
   return (
     <>
       <HeroSection
-        bgImage="/images/Bracelet.png"
+        bgImage="/images/Bracelet.webp"
         title={"BRACELETS"}
         subtitles={["Wrap Your Wrist in Timeless Elegance"]}
         topTitle={"60"}
@@ -88,13 +89,17 @@ const Bracelets = () => {
                   image: item.thumbnail || item.images?.[0],
                   price: item.price,
                   originalPrice: item.comparePrice,
-                  variants: item.variants,
-                  discount: item.comparePrice ? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100) : 0
+                  variants: item.variants
                 }}
               />
             ))
-          ) : (
+          ) : productsLoading ? (
             Array.from({ length: 8 }).map((_, index) => <SkeletonCard key={index} />)
+          ) : (
+            <div className="col-span-full text-center py-16">
+              <p className="text-gray-500 para mb-4">No products in this collection yet.</p>
+              <Link to="/new-arrivals" className="text-(--color-green) underline">Explore our new arrivals</Link>
+            </div>
           )}
         </div>
 

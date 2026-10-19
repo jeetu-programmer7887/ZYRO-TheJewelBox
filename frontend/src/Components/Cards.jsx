@@ -1,19 +1,27 @@
 import { useState, useEffect, useMemo, useContext, useRef } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { ShopContext } from '../config/ShopContext';
 import Swal from 'sweetalert2';
+import { toast } from 'react-toastify';
+import { optimizeImage } from '../Utility/image';
 
 const Cards = ({ product }) => {
     // Destructure variants to calculate stock
-    const { _id, id, title, image, hoverImage, price, originalPrice, discount, variants } = product || {};
+    const { _id, id, title, image, hoverImage, price, originalPrice, variants } = product || {};
     
     // Calculate total stock from variants
     const totalStock = variants?.reduce((acc, variant) => acc + (variant.stock || 0), 0) || 0;
     const isOutOfStock = totalStock <= 0;
 
+    // Only treat it as a sale when the compare price is actually higher
+    const hasDiscount = Number(originalPrice) > Number(price);
+    const discountPct = hasDiscount ? Math.round(((originalPrice - price) / originalPrice) * 100) : 0;
+
     const [imageLoaded, setImageLoaded] = useState(false);
-    const { addToCart, user, addToWishlist, wishlist } = useContext(ShopContext);
+    const { addToCart, user, addToWishlist, removeFromWishlist, wishlist, cartItems } = useContext(ShopContext);
     const navigate = useNavigate();
+    const location = useLocation();
+    const [isAdding, setIsAdding] = useState(false);
 
     const cartBtnRef = useRef(null);
 
@@ -36,15 +44,16 @@ const Cards = ({ product }) => {
     const handleWishlistClick = (e) => {
         e.preventDefault();
         e.stopPropagation();
-        addToWishlist(_id);
+        if (isWishlisted) removeFromWishlist(_id);
+        else addToWishlist(_id);
     };
 
-    const handleAddToCartClick = (e) => {
+    const handleAddToCartClick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
 
         // 1. Prevent adding if out of stock
-        if (isOutOfStock) return;
+        if (isOutOfStock || isAdding) return;
 
         if (!user.isLoggedIn) {
             Swal.fire({
@@ -59,13 +68,21 @@ const Cards = ({ product }) => {
                 scrollbarPadding: false,
             }).then((result) => {
                 if (result.isConfirmed) {
-                    navigate("/login", { state: { redirectTo: "/cart" } });
+                    navigate("/login", { state: { from: location, redirectTo: location.pathname + location.search } });
                 }
             });
             return;
         }
 
-        addToCart(_id);
+        if ((cartItems?.[_id] || 0) >= totalStock) {
+            toast.info(`Only ${totalStock} left in stock, and they're already in your bag`, { toastId: `cart-max-${_id}` });
+            return;
+        }
+
+        setIsAdding(true);
+        const added = await addToCart(_id);
+        setIsAdding(false);
+        if (!added) return;
 
         Swal.fire({
             icon: 'success',
@@ -102,15 +119,19 @@ const Cards = ({ product }) => {
                     {hoverImage && (
                         <img
                             className="w-full h-full object-cover absolute inset-0 transition-transform duration-700 ease-in-out group-hover/image:scale-100"
-                            src={hoverImage}
-                            alt="Product Hover"
+                            src={optimizeImage(hoverImage, 500)}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
                         />
                     )}
                     <img
                         className={`w-full h-full object-cover absolute inset-0 z-10 transition-all duration-700 ease-in-out group-hover/image:scale-110 ${imageLoaded && hoverImage ? 'group-hover/image:opacity-0' : 'opacity-100'
                             }`}
-                        src={image}
+                        src={optimizeImage(image, 500)}
                         alt={title}
+                        loading="lazy"
+                        decoding="async"
                     />
                 </Link>
 
@@ -118,6 +139,8 @@ const Cards = ({ product }) => {
                 <div className="absolute left-3 bottom-3 z-20 opacity-100 sm:opacity-0 sm:translate-y-4 sm:group-hover/image:translate-y-0 sm:group-hover/image:opacity-100 transition-all duration-300 ease-out">
                     <button
                         onClick={handleWishlistClick}
+                        aria-label={isWishlisted ? `Remove ${title} from wishlist` : `Add ${title} to wishlist`}
+                        aria-pressed={isWishlisted}
                         onMouseEnter={() => setIsWishlistHovered(true)}
                         onMouseLeave={() => setIsWishlistHovered(false)}
                         className={`cursor-pointer w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center border border-gray-200 transition-all duration-300 active:scale-95 ${wishlistStyles} hover:scale-110 shadow-sm`}
@@ -145,11 +168,11 @@ const Cards = ({ product }) => {
                     <div className="flex flex-col items-center justify-center mb-3">
                         <span className="font-bold text-sm sm:text-lg text-gray-900">₹ {price}</span>
                         <div className="flex items-center gap-1.5">
-                            {originalPrice && (
+                            {hasDiscount && (
                                 <span className="line-through text-gray-400 text-[10px] sm:text-xs">₹ {originalPrice}</span>
                             )}
-                            {discount > 0 && (
-                                <span className="text-green-600 text-[10px] sm:text-xs font-bold uppercase tracking-wider"> SAVE {discount}%</span>
+                            {discountPct > 0 && (
+                                <span className="text-green-600 text-[10px] sm:text-xs font-bold uppercase tracking-wider"> SAVE {discountPct}%</span>
                             )}
                         </div>
                     </div>
@@ -159,7 +182,8 @@ const Cards = ({ product }) => {
                 <button
                     ref={cartBtnRef}
                     onClick={handleAddToCartClick}
-                    disabled={isOutOfStock}
+                    disabled={isOutOfStock || isAdding}
+                    aria-label={isOutOfStock ? `${title} is out of stock` : `Add ${title} to bag`}
                     onMouseEnter={() => !isOutOfStock && setIsCartHovered(true)}
                     onMouseLeave={() => setIsCartHovered(false)}
                     className={`w-full py-2 border text-[11px] sm:text-xs font-bold rounded-lg flex items-center justify-center gap-2 transition-all duration-500 

@@ -11,9 +11,12 @@ const ResetPassword = () => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [step, setStep] = useState(1);
-  const [timer, setTimer] = useState(90);
+  const [timer, setTimer] = useState(300);
   const [isExpired, setIsExpired] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [resetToken, setResetToken] = useState("");
 
   // States for Password Visibility
   const [showNewPassword, setShowNewPassword] = useState(false);
@@ -33,17 +36,38 @@ const ResetPassword = () => {
 
     if (timer <= 0) {
       setIsExpired(true);
-      toast.error("OTP expired! Redirecting to login...");
-      setTimeout(() => navigate("/login"), 2000);
+      return;
     }
 
     const interval = setInterval(() => setTimer((prev) => prev - 1), 1000);
     return () => clearInterval(interval);
-  }, [timer, step, navigate]);
+  }, [timer, step]);
+
+  // No email in navigation state (e.g. page refreshed): start over
+  useEffect(() => {
+    if (!email) navigate("/forgot-password", { replace: true });
+  }, [email, navigate]);
+
+  const handleResend = async () => {
+    if (isResending) return;
+    setIsResending(true);
+    try {
+      const { data } = await axios.post(backendUrl + "/api/user/forgot-password", { email });
+      toast.success(data.message || "A new code has been sent");
+      setOtp("");
+      setIsExpired(false);
+      setTimer(data.otpExpiresIn || 300);
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Couldn't resend the code");
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   // VERIFY OTP
   const handleVerifyOtp = async () => {
     if (!otp) return toast.error("Otp is required");
+    if (isVerifying) return;
 
     setIsVerifying(true);
     try {
@@ -54,16 +78,17 @@ const ResetPassword = () => {
 
       if (res.data.success) {
         toast.success("OTP Verified");
+        setResetToken(res.data.resetToken);
         setStep(2);
       }
     } catch (err) {
       const message = err.response?.data?.message || "Verification Failed";
-      if (message.includes("OTP could not verified.")) {
-        toast.error(message);
-        setTimeout(() => navigate("/login"), 2000);
-      } else {
-        toast.error(message);
+      toast.error(message);
+      if (/expired|Too many/i.test(message)) {
+        setIsExpired(true);
+        setTimer(0);
       }
+      setOtp("");
     } finally {
       setIsVerifying(false);
     }
@@ -81,19 +106,29 @@ const ResetPassword = () => {
     if (!newPassword) return toast.error("Enter new password");
     if (!confirmPassword) return toast.error("Enter confirm password");
     if (newPassword !== confirmPassword) return toast.error("Passwords are different");
+    if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return toast.error("Password must be at least 8 characters with a letter and a number");
+    }
+    if (isSaving) return;
+    setIsSaving(true);
 
     try {
       const res = await axios.patch(backendUrl + "/api/user/reset-password", {
         email,
         newPassword,
+        resetToken,
       });
 
       if (res.data.success) {
-        toast.success("Password updated successfully");
-        navigate("/login");
+        toast.success("Password updated. Please log in with your new password.");
+        // Every session was signed out by the reset, including this one
+        try { localStorage.removeItem("role"); } catch { /* ignore */ }
+        window.location.replace("/login");
       }
     } catch (err) {
       toast.error(err.response?.data?.message || "Something went wrong");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -115,9 +150,23 @@ const ResetPassword = () => {
             </p>
 
             {/* Timer Display */}
-            <p className="text-center text-red-600 text-lg font-semibold">
-              Time left: {timer}s
-            </p>
+            {isExpired ? (
+              <div className="text-center space-y-2">
+                <p className="text-red-600 text-sm font-semibold">This code has expired.</p>
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={isResending}
+                  className="text-sm font-semibold text-(--color-green) underline underline-offset-4 disabled:opacity-50"
+                >
+                  {isResending ? "Sending..." : "Send a new code"}
+                </button>
+              </div>
+            ) : (
+              <p className="text-center text-gray-600 text-sm font-semibold">
+                Code expires in {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
+              </p>
+            )}
 
             <div className="space-y-2">
               <label className="block text-sm font-semibold">Enter OTP</label>
@@ -130,8 +179,8 @@ const ResetPassword = () => {
                 autoFocus={true}
                 placeholder="000000"
                 value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                disabled={isExpired}
+                onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                disabled={isExpired || isVerifying}
               />
             </div>
 

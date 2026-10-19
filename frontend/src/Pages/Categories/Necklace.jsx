@@ -2,10 +2,11 @@ import { useMemo, useContext, useState, useEffect, useRef } from 'react'
 import HeroSection from '../../Components/HeroSection'
 import Cards from '../../Components/Cards'
 import SkeletonCard from '../../Components/Skeleton'
+import { Link } from 'react-router-dom'
 import { ShopContext } from '../../config/ShopContext'
 
 const Necklaces = () => {
-  const { allProducts } = useContext(ShopContext);
+  const { allProducts, productsLoading } = useContext(ShopContext);
 
   const [visibleCount, setVisibleCount] = useState(12);
   const [isIncrementing, setIsIncrementing] = useState(false);
@@ -45,7 +46,7 @@ const Necklaces = () => {
   return (
     <>
       <HeroSection
-        bgImage= "/images/NecklaceHero.jpg"
+        bgImage= "/images/NecklaceHero.webp"
         title={"NECKLACES"}
         subtitles={["Adorn Your Grace with Timeless Elegance"]}
         topTitle={"60"}
@@ -71,7 +72,7 @@ const Necklaces = () => {
         <div className="text-center mt-20 mb-12 px-4">
           <p className="text-sm tracking-widest text-gray-400 title mb-3">BROWSE</p>
           <h1 className="text-4xl sm:text-5xl other text-(--color-gold) tracking-widest uppercase">
-            NecklaceS COLLECTION
+            NECKLACES COLLECTION
           </h1>
         </div>
 
@@ -88,13 +89,17 @@ const Necklaces = () => {
                   image: item.thumbnail || item.images?.[0],
                   price: item.price,
                   originalPrice: item.comparePrice,
-                  variants: item.variants,
-                  discount: item.comparePrice ? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100) : 0
+                  variants: item.variants
                 }}
               />
             ))
-          ) : (
+          ) : productsLoading ? (
             Array.from({ length: 8 }).map((_, index) => <SkeletonCard key={index} />)
+          ) : (
+            <div className="col-span-full text-center py-16">
+              <p className="text-gray-500 para mb-4">No products in this collection yet.</p>
+              <Link to="/new-arrivals" className="text-(--color-green) underline">Explore our new arrivals</Link>
+            </div>
           )}
         </div>
 
@@ -107,7 +112,7 @@ const Necklaces = () => {
                   <path d="M25,45 C5,45 5,5 25,5 C45,5 55,45 75,45 C95,45 95,5 75,5 C55,5 45,45 25,45 Z" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeDasharray="110 330" className="animate-infinity" />
                 </svg>
               </div>
-              <p className="text-sm font-semibold tracking-[0.2em] text-(--color-green) animate-pulse uppercase">DiscoveNecklace more jewels...</p>
+              <p className="text-sm font-semibold tracking-[0.2em] text-(--color-green) animate-pulse uppercase">Discovering more jewels...</p>
             </div>
           )}
 

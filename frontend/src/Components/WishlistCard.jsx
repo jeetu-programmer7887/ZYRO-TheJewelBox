@@ -1,26 +1,34 @@
 import { useState, useEffect, useContext } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ShopContext } from '../config/ShopContext.jsx';
 import { IoHeart, IoHeartOutline } from "react-icons/io5"; 
 import Swal from 'sweetalert2';
+import { toast } from 'react-toastify';
+import { optimizeImage } from '../Utility/image';
 
 const WishlistCard = ({ product }) => {
     // Destructure variants to check stock
-    const { _id, slug, title, thumbnail, images, price, variants } = product || {};
+    const { _id, title, thumbnail, images, price, comparePrice, variants } = product || {};
     const id = _id;
 
     // Calculate total stock across all variants
     const totalStock = variants?.reduce((acc, variant) => acc + (variant.stock || 0), 0) || 0;
     const isOutOfStock = totalStock <= 0;
 
-    const displayImage = thumbnail || images[0];
+    const displayImage = thumbnail || images?.[0];
+
+    // Only treat it as a sale when the compare price is actually higher
+    const hasDiscount = Number(comparePrice) > Number(price);
+    const discountPct = hasDiscount ? Math.round(((comparePrice - price) / comparePrice) * 100) : 0;
     const hoverImage = images?.[1];
 
     const [imageLoaded, setImageLoaded] = useState(false);
     const [isRemoving, setIsRemoving] = useState(false);
+    const [isAdding, setIsAdding] = useState(false);
 
-    const { addToCart, user, removeFromWishlist } = useContext(ShopContext);
+    const { addToCart, user, removeFromWishlist, cartItems } = useContext(ShopContext);
     const navigate = useNavigate();
+    const location = useLocation();
 
     useEffect(() => {
         if (hoverImage) {
@@ -33,6 +41,7 @@ const WishlistCard = ({ product }) => {
     const handleRemove = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (isRemoving) return;
         setIsRemoving(true);
         setTimeout(() => {
             removeFromWishlist(_id);
@@ -48,9 +57,10 @@ const WishlistCard = ({ product }) => {
         }, 300);
     };
 
-    const handleAddToCart = (e) => {
+    const handleAddToCart = async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (isAdding) return;
 
         // 1. Check for stock first
         if (isOutOfStock) {
@@ -75,13 +85,22 @@ const WishlistCard = ({ product }) => {
                 cancelButtonText: 'Maybe Later',
             }).then((result) => {
                 if (result.isConfirmed) {
-                    navigate("/login", { state: { redirectTo: "/cart" } });
+                    navigate("/login", { state: { from: location, redirectTo: location.pathname + location.search } });
                 }
             });
             return;
         }
 
-        addToCart(_id);
+        if ((cartItems?.[_id] || 0) >= totalStock) {
+            toast.info(`Only ${totalStock} left in stock, and they're already in your bag`, { toastId: `cart-max-${_id}` });
+            return;
+        }
+
+        setIsAdding(true);
+        const added = await addToCart(_id);
+        setIsAdding(false);
+        if (!added) return;
+
         Swal.fire({
             icon: 'success',
             title: 'Added to cart',
@@ -113,23 +132,27 @@ const WishlistCard = ({ product }) => {
                     {hoverImage && (
                         <img
                             className={`w-full h-full object-cover absolute inset-0 transition-transform duration-700 ease-in-out group-hover:scale-110`}
-                            src={hoverImage}
-                            alt="Product Hover"
+                            src={optimizeImage(hoverImage, 500)}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
                         />
                     )}
                     <img
                         className={`w-full h-full object-cover absolute inset-0 z-10 transition-all duration-700 ease-in-out group-hover:scale-110 ${
                             imageLoaded && hoverImage ? 'group-hover:opacity-0' : 'opacity-100'
                         }`}
-                        src={displayImage}
+                        src={optimizeImage(displayImage, 500)}
                         alt={title}
+                        loading="lazy"
+                        decoding="async"
                     />
                 </Link>
 
                 <button
                     onClick={handleRemove}
                     className="group/heart absolute top-3 right-3 z-20 cursor-pointer w-9 h-9 bg-white/60 backdrop-blur-md rounded-full flex items-center justify-center transition-all border border-gray-300 duration-300 hover:bg-white shadow-sm"
-                    aria-label="Remove from wishlist"
+                    aria-label={`Remove ${title} from wishlist`}
                 >
                     <IoHeart 
                         size={20} 
@@ -153,13 +176,22 @@ const WishlistCard = ({ product }) => {
                         <span className="font-bold text-sm sm:text-lg text-gray-900">
                             ₹ {price}
                         </span>
+                        {hasDiscount && (
+                            <span className="flex items-center gap-1.5">
+                                <span className="line-through text-gray-400 text-[10px] sm:text-xs">₹ {comparePrice}</span>
+                                {discountPct > 0 && (
+                                    <span className="text-green-600 text-[10px] sm:text-xs font-bold uppercase tracking-wider">SAVE {discountPct}%</span>
+                                )}
+                            </span>
+                        )}
                     </div>
                 </Link>
 
                 <div className="flex gap-2 mt-auto">
                     <button
                         onClick={handleAddToCart}
-                        disabled={isOutOfStock}
+                        disabled={isOutOfStock || isAdding}
+                        aria-label={isOutOfStock ? `${title} is out of stock` : `Add ${title} to bag`}
                         className={`group/btn w-full py-3 border text-[10px] sm:text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all duration-500 ease-in-out
                             ${isOutOfStock 
                                 ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed' 

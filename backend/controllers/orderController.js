@@ -4,6 +4,10 @@ import productModel from '../models/productModel.js';
 import razorpay from "razorpay";
 import crypto from "crypto";
 import sendOrderEmail from "../middleware/sendOrderEmail.js";
+import mongoose from "mongoose";
+import { transitionOrder, OrderTransitionError, CUSTOMER_CANCELLABLE } from "../services/orderLifecycle.js";
+
+const RETURN_WINDOW_DAYS = 7;
 
 // Razorpay Initialization
 const razorpayInstance = new razorpay({
@@ -12,15 +16,6 @@ const razorpayInstance = new razorpay({
 });
 
 // COIN HELPERS 
-const addCoins = async (userId, coins, reason, orderId) => {
-    await userModel.findByIdAndUpdate(userId, {
-        $inc: { coinsPresent: coins, coinsEarned: coins }, //  fixed
-        $push: {
-            coinsHistory: { type: "earned", coins, reason, orderId }
-        }
-    });
-};
-
 const deductCoins = async (userId, coins, reason, orderId) => {
     await userModel.findByIdAndUpdate(userId, {
         $inc: { coinsPresent: -coins }, //  fixed — only deduct from balance
@@ -239,64 +234,46 @@ const userOrders = async (req, res) => {
     try {
         const userId = req.user._id;
         const orders = await orderModel.find({ userId })
-            .select('items amount status paymentMethod payment createdAt deliveryDate coinsRedeemed coinsEarned coinsAwarded returnReason') //  returnReason added
-            .sort({ createdAt: -1 });
+            .select('items amount status paymentMethod payment refundStatus createdAt deliveryDate coinsRedeemed coinsEarned coinsAwarded returnReason')
+            .sort({ createdAt: -1 })
+            .limit(200)
+            .lean();
 
         return res.json({ success: true, orders });
     } catch (error) {
-        return res.status(500).json({ success: false, message: error.message });
+        console.error("User Orders Error:", error);
+        return res.status(500).json({ success: false, message: "Couldn't load your orders" });
     }
 };
 
-// 5. Cancel Order
+// 5. Cancel Order (only before the order ships)
 const cancelOrder = async (req, res) => {
     try {
         const { orderId } = req.body;
-        const userId = req.user._id;
-
-        const order = await orderModel.findOne({ _id: orderId, userId });
-        if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found" });
-        }
-        if (order.status === "Cancelled") {
-            return res.status(400).json({ success: false, message: "Order is already cancelled" });
+        if (!mongoose.isValidObjectId(orderId)) {
+            return res.status(400).json({ success: false, message: "Invalid order" });
         }
 
-        // Restore stock
-        for (const item of order.items) {
-            const product = await productModel.findById(item.productId);
-            if (!product) continue;
-            if (item.variantSku === "Standard") {
-                product.variants[0].stock += item.quantity;
-            } else {
-                const variant = product.variants.find(v => v.sku === item.variantSku);
-                if (variant) variant.stock += item.quantity;
-            }
-            await product.save();
-        }
+        const order = await transitionOrder(orderId, "Cancelled", {
+            userId: req.user._id,
+            allowedFrom: CUSTOMER_CANCELLABLE,
+        });
 
-        // Update order status to Cancelled
-        const updatedOrder = await orderModel.findByIdAndUpdate(
-            orderId,
-            { status: "Cancelled" },
-            { new: true }
-        );
-
-        try {
-            await sendOrderEmail(req.user.email, updatedOrder);
-        } catch (error) {
-            console.error("Email failed to send, but order was updated:", emailError);
-        }
-
-        //  Refund redeemed coins back if order cancelled
-        if (order.coinsRedeemed > 0) {
-            await addCoins(userId, order.coinsRedeemed, `Refund for cancelled order`, orderId);
-        }
-
-        return res.json({ success: true, message: "Order Cancelled Successfully" });
+        return res.json({
+            success: true,
+            message: order.refundStatus === "pending"
+                ? "Order cancelled. Your refund will be processed to the original payment method."
+                : "Order Cancelled Successfully",
+        });
 
     } catch (error) {
-        console.log("Cancel Order Error", error);
+        if (error instanceof OrderTransitionError) {
+            const message = error.status === 400
+                ? "This order can no longer be cancelled because it has already shipped."
+                : error.message;
+            return res.status(error.status).json({ success: false, message });
+        }
+        console.error("Cancel Order Error", error);
         return res.status(500).json({ success: false, message: "Internal server error" });
     }
 }
@@ -306,7 +283,7 @@ const fetchCoins = async (req, res) => {
     try {
         const userId = req.user._id;
         //  select correct field names from schema
-        const user = await userModel.findById(userId).select('coinsPresent coinsEarned coinsHistory');
+        const user = await userModel.findById(userId).select('coinsPresent coinsEarned coinsHistory').lean();
 
         if (!user) {
             return res.status(404).json({ success: false, message: "User not found" });
@@ -319,32 +296,50 @@ const fetchCoins = async (req, res) => {
             coinsHistory: (user.coinsHistory || []).slice(-20).reverse()
         });
     } catch (error) {
-        console.log("Fetch Coins Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        console.error("Fetch Coins Error:", error);
+        return res.status(500).json({ success: false, message: "Couldn't load your coins" });
     }
 };
 
 const requestReturn = async (req, res) => {
     try {
-        const { orderId, reason } = req.body;
-        const userId = req.user._id;
+        const { orderId } = req.body;
+        const reason = typeof req.body.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
+        if (!mongoose.isValidObjectId(orderId)) {
+            return res.status(400).json({ success: false, message: "Invalid order" });
+        }
 
-        const order = await orderModel.findOne({ _id: orderId, userId });
+        const order = await orderModel.findOne({ _id: orderId, userId: req.user._id }).select("status deliveryDate updatedAt").lean();
         if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
         if (order.status !== "Delivered") {
             return res.status(400).json({ success: false, message: "Only delivered orders can be returned" });
         }
 
-        await orderModel.findByIdAndUpdate(orderId, {
-            status: "Return Requested",
-            returnReason: reason || "No reason provided"
+        const deliveredAt = new Date(order.deliveryDate || order.updatedAt);
+        const windowEnds = deliveredAt.getTime() + RETURN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+        if (Date.now() > windowEnds) {
+            return res.status(400).json({
+                success: false,
+                message: `Returns are accepted within ${RETURN_WINDOW_DAYS} days of delivery. This order is outside the return window.`,
+            });
+        }
+
+        await transitionOrder(orderId, "Return Requested", {
+            userId: req.user._id,
+            allowedFrom: ["Delivered"],
+            notify: false,
+            extra: { returnReason: reason || "No reason provided" },
         });
 
         return res.json({ success: true, message: "Return request submitted successfully" });
 
     } catch (error) {
-        return res.status(500).json({ success: false, message: error.message });
+        if (error instanceof OrderTransitionError) {
+            return res.status(error.status).json({ success: false, message: error.message });
+        }
+        console.error("Return Request Error:", error);
+        return res.status(500).json({ success: false, message: "Couldn't submit the return request" });
     }
 };
 

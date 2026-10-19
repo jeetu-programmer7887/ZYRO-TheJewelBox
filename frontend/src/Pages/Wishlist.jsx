@@ -1,29 +1,17 @@
-import React, { useContext, useState, useEffect } from 'react';
+import React, { useContext } from 'react';
 import { ShopContext } from '../config/ShopContext.jsx';
 import WishlistCard from '../Components/WishlistCard';
 import { Link } from 'react-router-dom';
 
 const Wishlist = () => {
-    const { wishlist, allProducts } = useContext(ShopContext);
-    const [loading, setLoading] = useState(true);
+    const { wishlist, allProducts, productsLoading } = useContext(ShopContext);
+    // Only wait while the product list is actually loading
+    const loading = productsLoading && !allProducts?.length;
 
-    // Logic to wait for data before deciding to show the list or empty state
-    useEffect(() => {
-        if (allProducts && allProducts.length >= 0 && wishlist) {
-            const timer = setTimeout(() => setLoading(false), 800); // Slight delay for smooth transition
-            return () => clearTimeout(timer);
-        }
-    }, [allProducts, wishlist]);
-
-    const wishlistItems = wishlist
+    const wishlistItems = (wishlist || [])
         .map(id => allProducts.find(product => product._id === id))
         .filter(Boolean)
-        .slice()
         .reverse();
-
-    useEffect(() => {
-        console.log("Items : ", wishlistItems)
-    })
 
     return (
         <div className="bg-(--color-green)/1 lg:pb-20 lg:pt-10 mt-20 lg:mt-20 pt-5 px-4 pb-20 md:px-10 lg:px-15">

@@ -1,519 +1,530 @@
 import userModel from "../models/userModel.js";
 import httpStatus from "http-status";
-import validator from "validator";
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
+import axios from "axios";
 import sendVerificationEmail from "../middleware/sendVerificationEmail.js";
+import {
+  OTP_TTL_MS, OTP_RESEND_COOLDOWN_MS, OTP_MAX_ATTEMPTS, RESET_TOKEN_TTL_MS,
+  setUserSession, setAdminSession, clearAuthCookie, cookieOptions,
+  generateOtp, hashSecret, safeEqual, generateResetToken,
+  asEmail, asString, asOtp, validatePassword,
+} from "../utils/security.js";
 
-const createToken = (id) => {
-  return jwt.sign({ id, role: 'user' }, process.env.JWT_SECRET);
+const ADMIN_OTP_COOKIE = "admin_otp";
+
+const isAdminEmail = (email) =>
+  !!process.env.ADMIN_EMAIL && email === process.env.ADMIN_EMAIL.trim().toLowerCase();
+
+// Emails used to be stored exactly as typed, so look them up case-insensitively.
+const findUserByEmail = (email) =>
+  userModel.findOne({ email }).collation({ locale: "en", strength: 2 });
+
+const publicUser = (user) => ({
+  username: `${user.firstName} ${user.lastName}`.trim(),
+  email: user.email,
+});
+
+// Issue a fresh OTP for `user`, store only its hash, and email it.
+// Returns false when the email could not be sent.
+const issueOtp = async (user, { extendPendingSignup = false } = {}) => {
+  const otp = generateOtp();
+  user.verificationCode = hashSecret(otp);
+  user.verificationAttempts = 0;
+  user.otpExpiry = new Date(Date.now() + OTP_TTL_MS);
+  user.otpSentAt = new Date();
+  if (extendPendingSignup) {
+    // Unverified sign-ups are auto-deleted by a TTL index when this passes.
+    user.verificationExpireAt = new Date(Date.now() + OTP_TTL_MS + 60 * 1000);
+  }
+  await user.save();
+  return sendVerificationEmail(user.email, otp);
+};
+
+const cooldownRemaining = (user) => {
+  if (!user.otpSentAt) return 0;
+  return Math.max(0, Math.ceil((user.otpSentAt.getTime() + OTP_RESEND_COOLDOWN_MS - Date.now()) / 1000));
+};
+
+// Checks `otp` against the stored hash. Burns the code after too many
+// wrong guesses so it can't be brute-forced.
+const checkOtp = async (user, otp) => {
+  if (!user.verificationCode || !user.otpExpiry || user.otpExpiry.getTime() < Date.now()) {
+    return { ok: false, message: "This code has expired. Please request a new one." };
+  }
+  if ((user.verificationAttempts || 0) >= OTP_MAX_ATTEMPTS) {
+    return { ok: false, message: "Too many incorrect attempts. Please request a new code." };
+  }
+  if (!safeEqual(hashSecret(otp), user.verificationCode)) {
+    user.verificationAttempts = (user.verificationAttempts || 0) + 1;
+    const left = OTP_MAX_ATTEMPTS - user.verificationAttempts;
+    if (left <= 0) {
+      user.verificationCode = null;
+      user.otpExpiry = null;
+    }
+    await user.save();
+    return {
+      ok: false,
+      message: left > 0
+        ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.`
+        : "Too many incorrect attempts. Please request a new code.",
+    };
+  }
+  return { ok: true };
 };
 
 //Route for Login
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = asEmail(req.body.email);
+    const { password } = req.body;
 
-    //For Admin Login only
-    if (email === process.env.ADMIN_EMAIL) {
+    if (!email || typeof password !== "string" || !password) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Please enter your email and password" });
+    }
 
-      if (password === process.env.ADMIN_PASSWORD) {
-        // Creating OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-        // Sending OTP to the user via mail
-        const sent = await sendVerificationEmail(email, otp);
-        if (!sent) return res.status(500).json({ message: "Failed to send OTP" });
-
-        const OTP = jwt.sign({ OTP: otp }, process.env.JWT_SECRET);
-
-        res.cookie("OTP", OTP, {
-          httpOnly: true,
-          secure: true,
-          sameSite: "None",
-          maxAge: 1000 * 90
-        });
-
-        return res
-          .json({
-            success: true,
-            isAdmin: true,
-            password: true,
-            message: "Admin Logged In",
-            email: email
-          });
-      } else {
-        return res
-          .json({
-            success: false,
-            isAdmin: true,
-            password: false,
-            message: "Invalid Credentials",
-          });
+    //For Admin Login only: password, then a one-time code sent by email
+    if (isAdminEmail(email)) {
+      const expected = process.env.ADMIN_PASSWORD || "";
+      if (!expected || !safeEqual(password, expected)) {
+        return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Invalid email or password" });
       }
-    }
 
-    const user = await userModel.findOne({ email });
+      const otp = generateOtp();
+      const sent = await sendVerificationEmail(email, otp);
+      if (!sent) {
+        return res.status(httpStatus.SERVICE_UNAVAILABLE).json({ success: false, message: "Couldn't send the verification code. Please try again." });
+      }
 
-    if (!user) {
-      return res
-        .status(httpStatus.NOT_FOUND)
-        .json({ success: false, message: "Email is not registered" });
-    }
+      // The cookie holds only a keyed hash of the code plus its expiry,
+      // so reading the cookie does not reveal the code.
+      const payload = JSON.stringify({ h: hashSecret(otp), exp: Date.now() + OTP_TTL_MS, n: 0 });
+      res.cookie(ADMIN_OTP_COOKIE, payload, { ...cookieOptions(OTP_TTL_MS), signed: true });
 
-    // If already signed up using google
-    if (user.isGoogleAuth) {
-      return res.status(httpStatus.CONFLICT).json({
-        success: false,
-        message: "Login with google",
-      });
-    }
-
-    // Email is not verified
-    if (!user.verified) {
-      const remainingTime = Math.ceil((user.otpExpiry - Date.now()) / 1000);
-      return res.status(httpStatus.UNAUTHORIZED).json({
-        success: false,
-        message: `You requested an OTP. Try again in ${remainingTime} seconds.`,
-      });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-
-    if (isMatch) {
-      // If Passwords matches 
-      const token = createToken(user._id);
-
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "None",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
       return res.json({
         success: true,
-        message: "User logged in successfully",
-        username: user.firstName + " " + user.lastName,
-        email: user.email,
+        isAdmin: true,
+        password: true,
+        message: "Verification code sent to the admin email",
+        email,
       });
-    } else {
-      return res
-        .status(httpStatus.UNAUTHORIZED)
-        .json({ success: false, message: "Invalid Password" });
     }
+
+    const user = await findUserByEmail(email);
+
+    if (!user || (!user.verified && !user.isGoogleAuth)) {
+      if (user && !user.verified) {
+        return res.status(httpStatus.FORBIDDEN).json({
+          success: false,
+          needsVerification: true,
+          message: "Please verify your email first. We can send you a new code.",
+        });
+      }
+      return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Invalid email or password" });
+    }
+
+    // Signed up with Google and never set a password
+    if (user.isGoogleAuth && !user.password) {
+      return res.status(httpStatus.CONFLICT).json({
+        success: false,
+        message: "This account uses Google sign-in. Please continue with Google.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password || "");
+    if (!isMatch) {
+      return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Invalid email or password" });
+    }
+
+    setUserSession(res, user);
+    return res.json({
+      success: true,
+      message: "Logged in successfully",
+      ...publicUser(user),
+    });
   } catch (error) {
-    console.log("User Login Error : ", error);
-    return res
-      .status(httpStatus.INTERNAL_SERVER_ERROR)
-      .json({ success: false, message: error.message });
+    console.error("User Login Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
+  }
+};
+
+// Admin step 2: check the emailed code and start an admin session
+const verifyAdmin = (req, res) => {
+  try {
+    const raw = req.signedCookies?.[ADMIN_OTP_COOKIE];
+    const otp = asOtp(req.body.otp);
+
+    if (!raw) {
+      return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Your code has expired. Please log in again." });
+    }
+    if (!otp) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Enter the 6-digit code" });
+    }
+
+    let state;
+    try { state = JSON.parse(raw); } catch { state = null; }
+    if (!state || state.exp < Date.now() || state.n >= OTP_MAX_ATTEMPTS) {
+      clearAuthCookie(res, ADMIN_OTP_COOKIE);
+      return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Your code has expired. Please log in again." });
+    }
+
+    if (!safeEqual(hashSecret(otp), state.h)) {
+      const next = { ...state, n: state.n + 1 };
+      res.cookie(ADMIN_OTP_COOKIE, JSON.stringify(next), { ...cookieOptions(Math.max(0, state.exp - Date.now())), signed: true });
+      return res.status(httpStatus.FORBIDDEN).json({ success: false, isVerified: false, message: "Invalid code" });
+    }
+
+    clearAuthCookie(res, ADMIN_OTP_COOKIE);
+    setAdminSession(res);
+    return res.json({
+      success: true,
+      isAdmin: true,
+      isVerified: true,
+      message: "Admin logged in",
+      email: process.env.ADMIN_EMAIL,
+    });
+  } catch (error) {
+    console.error("Admin Verify Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
 //Route for Registeration
 const registerUser = async (req, res) => {
   try {
-    const { firstName, lastName, email, password } = req.body;
+    const email = asEmail(req.body.email);
+    const firstName = asString(req.body.firstName, { max: 50 });
+    const lastName = asString(req.body.lastName, { max: 50 });
+    const { password } = req.body;
 
-    //Check for admin email
-    if (email == process.env.ADMIN_EMAIL) {
-      return res
-        .status(httpStatus.BAD_REQUEST)
-        .json({ success: false, message: "This email cannot be registered." });
+    if (!firstName || !lastName) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Please enter your first and last name" });
+    }
+    if (!email) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Please enter a valid email" });
+    }
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: passwordError });
+    }
+    if (isAdminEmail(email)) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "This email cannot be registered." });
     }
 
-    //checking if user exists
-    const exists = await userModel.findOne({ email });
+    let user = await findUserByEmail(email);
 
-    if (exists) {
-      if (exists.verified) {
-        return res.status(httpStatus.CONFLICT).json({
-          success: false,
-          message: "User already exists."
-        })
-      } else if (exists.isGoogleAuth) {
-        return res.status(httpStatus.CONFLICT).json({
-          success: false,
-          message: "Sign in with Google"
-        })
-      } else {
-        const remainingTime = Math.ceil((exists.otpExpiry - Date.now()) / 1000)
-        return res.status(httpStatus.TOO_EARLY).json({
-          success: false,
-          message: `You already requested an OTP. Try in ${remainingTime} seconds.`
-        })
-      }
-    }
-
-    //Validating Email and password
-    if (!validator.isEmail(email)) {
-      return res
-        .status(httpStatus.BAD_REQUEST)
-        .json({ success: false, message: "Please enter a valid email" });
-    }
-
-    if (password.length < 8) {
-      return res.status(httpStatus.BAD_REQUEST).json({
+    if (user && (user.verified || user.isGoogleAuth)) {
+      return res.status(httpStatus.CONFLICT).json({
         success: false,
-        message: "Password must have at least 8 characters",
+        message: user.isGoogleAuth
+          ? "An account with this email already exists. Please continue with Google."
+          : "An account with this email already exists. Please log in.",
       });
     }
 
-    // Creating OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    if (user) {
+      // A previous sign-up was never verified: let them start over, but
+      // respect the resend cooldown so the inbox can't be flooded.
+      const wait = cooldownRemaining(user);
+      if (wait > 0) {
+        return res.status(httpStatus.TOO_MANY_REQUESTS).json({
+          success: false,
+          message: `Please wait ${wait} seconds before requesting another code.`,
+        });
+      }
+      user.firstName = firstName;
+      user.lastName = lastName;
+      user.password = await bcrypt.hash(password, 10);
+    } else {
+      user = new userModel({
+        firstName,
+        lastName,
+        email,
+        password: await bcrypt.hash(password, 10),
+        verified: false,
+      });
+    }
 
-    //Hashing the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    //Saving User into database
-    const newUser = await userModel.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      verified: false,
-      verificationCode: otp,
-      otpExpiry: Date.now() + 90 * 1000,
-      verificationExpireAt: new Date(Date.now() + 90 * 1000),
-    });
-
-    // Sending OTP to the user via mail
-    const sent = await sendVerificationEmail(email, otp);
-    if (!sent) return res.status(500).json({ message: "Failed to send OTP" });
+    const sent = await issueOtp(user, { extendPendingSignup: true });
+    if (!sent) {
+      return res.status(httpStatus.SERVICE_UNAVAILABLE).json({ success: false, message: "Couldn't send the verification email. Please try again." });
+    }
 
     return res.json({
       success: true,
       message: "Verification code sent to your email",
-      userId: newUser._id,
+      otpExpiresIn: OTP_TTL_MS / 1000,
     });
   } catch (error) {
-    console.log("Email Verification Error: ", error);
-    return res.status(500).json({ success: false, message: "Server error" });
+    console.error("Registration Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
+};
+
+// Verify a Google OAuth access token with Google itself, and make sure it
+// was issued to this app. Never trust profile data sent by the browser.
+const fetchGoogleProfile = async (accessToken) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const { data: info } = await axios.get("https://oauth2.googleapis.com/tokeninfo", {
+    params: { access_token: accessToken },
+    timeout: 7000,
+  });
+  if (clientId && info.aud !== clientId && info.azp !== clientId) {
+    throw new Error("Google token was issued to a different app");
+  }
+  const { data: profile } = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeout: 7000,
+  });
+  if (!profile.email || profile.email_verified === false) {
+    throw new Error("Google account email is not verified");
+  }
+  return profile;
 };
 
 //For google Login & SignUP
 const withGoogle = async (req, res) => {
   try {
-    const { firstName, lastName, email, isGoogleAuth, googleId } = req.body;
-
-    //Check for admin email
-    if (email == process.env.ADMIN_EMAIL) {
-      return res
-        .status(httpStatus.BAD_REQUEST)
-        .json({ success: false, message: "This email cannot be registered." });
+    const accessToken = asString(req.body.accessToken, { max: 4096 });
+    if (!accessToken) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Google sign-in failed. Please try again." });
     }
 
-    //checking user exists
-    const exists = await userModel.findOne({ email });
+    let profile;
+    try {
+      profile = await fetchGoogleProfile(accessToken);
+    } catch (error) {
+      console.error("Google token verification failed:", error.message);
+      return res.status(httpStatus.UNAUTHORIZED).json({ success: false, message: "Google sign-in failed. Please try again." });
+    }
 
-    if (exists) {
-      //  If user exits then Login 
-      const token = createToken(exists._id);
+    const email = asEmail(profile.email);
+    if (!email || isAdminEmail(email)) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "This email cannot be used to sign in." });
+    }
 
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "None",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
-      return res.status(httpStatus.CREATED).json({
-        success: true,
-        message: "User Logged in successfully",
-        username: exists.firstName + " " + exists.lastName,
-        email: exists.email,
+    let user = await findUserByEmail(email);
+
+    if (user) {
+      // Google has verified this email address, so it's safe to link the
+      // Google identity to an existing account with the same email.
+      let changed = false;
+      if (!user.googleId) { user.googleId = profile.sub; changed = true; }
+      if (!user.verified) {
+        user.verified = true;
+        user.verificationCode = null;
+        user.otpExpiry = null;
+        user.verificationExpireAt = undefined;
+        changed = true;
+      }
+      if (changed) await user.save();
+    } else {
+      user = await userModel.create({
+        firstName: profile.given_name || profile.name || "ZYRO",
+        lastName: profile.family_name || "Customer",
+        email,
+        isGoogleAuth: true,
+        googleId: profile.sub,
+        verified: true,
       });
     }
 
-    //Register the new user
-    const newUser = new userModel({
-      firstName,
-      lastName,
-      email,
-      isGoogleAuth,
-      googleId,
-    });
-    const user = await newUser.save();
-
-    // If new user then register first  
-    const token = createToken(user._id);
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    return res.status(httpStatus.CREATED).json({
+    setUserSession(res, user);
+    return res.status(httpStatus.OK).json({
       success: true,
-      message: "User registered successfully",
-      username: user.firstName + " " + user.lastName,
-      email: user.email,
+      message: "Logged in successfully",
+      ...publicUser(user),
     });
   } catch (error) {
-    console.log("Google Registeration Error", error);
-    return res
-      .status(httpStatus.INTERNAL_SERVER_ERROR)
-      .json({ success: false, message: error.message });
+    console.error("Google Sign-in Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
 //For Verifying the email
 const verifyEmail = async (req, res) => {
   try {
-    const { email, otp } = req.body;
-
-    // Check for the email
-    const user = await userModel.findOne({ email });
-
-    if (!user)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid request" });
-
-    // DELETE IF OTP EXPIRED
-    if (user.otpExpiry < Date.now()) {
-      await userModel.deleteOne({ email });
-      return res.status(400).json({
-        success: false,
-        message: "OTP expired. User is not verified.",
-      });
+    const email = asEmail(req.body.email);
+    const otp = asOtp(req.body.otp);
+    if (!email || !otp) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Enter the 6-digit code" });
     }
 
-    // MAX 3 ATTEMPTS CHECK
-    if (user.verificationAttempts >= 3) {
-      await userModel.deleteOne({ email });
-      return res.status(400).json({
-        success: false,
-        message: "Too many attempts. User could not registered",
-      });
+    const user = await findUserByEmail(email);
+    if (!user || user.verified) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "This code is invalid or has expired." });
     }
 
-    // WRONG OTP CHECK
-    const isMatch = otp == user.verificationCode;
-
-    if (!isMatch) {
-      user.verificationAttempts += 1;
-      await user.save();
-      return res.status(400).json({
-        success: false,
-        message:
-          "Incorrect otp, attempts left: " + (3 - user.verificationAttempts),
-      });
+    const result = await checkOtp(user, otp);
+    if (!result.ok) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: result.message });
     }
 
-    // SUCCESS – VERIFY
     user.verified = true;
     user.verificationCode = null;
-    user.verificationAttempts = null;
+    user.verificationAttempts = 0;
     user.otpExpiry = null;
-    user.verificationExpireAt = null;
-
+    user.verificationExpireAt = undefined;
     await user.save();
 
-    const token = createToken(user._id);
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    return res.status(200).json({
+    setUserSession(res, user);
+    return res.status(httpStatus.OK).json({
       success: true,
       message: "Email verified successfully",
-      username: `${user.firstName} ${user.lastName}`,
-      email: user.email
+      ...publicUser(user),
     });
   } catch (error) {
-    console.log(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Verify Email Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
+  }
+};
+
+// Resend a code for sign-up verification or password reset
+const resendOtp = async (req, res) => {
+  try {
+    const email = asEmail(req.body.email);
+    const purpose = req.body.purpose === "reset" ? "reset" : "verify";
+    const genericOk = { success: true, message: "If an account exists for this email, a new code has been sent.", otpExpiresIn: OTP_TTL_MS / 1000 };
+
+    if (!email) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Please enter a valid email" });
+    }
+
+    const user = await findUserByEmail(email);
+    const eligible = user && (purpose === "verify" ? !user.verified : user.verified && !!user.password);
+    if (!eligible) return res.json(genericOk);
+
+    const wait = cooldownRemaining(user);
+    if (wait > 0) {
+      return res.status(httpStatus.TOO_MANY_REQUESTS).json({
+        success: false,
+        message: `Please wait ${wait} seconds before requesting another code.`,
+        retryAfter: wait,
+      });
+    }
+
+    const sent = await issueOtp(user, { extendPendingSignup: purpose === "verify" });
+    if (!sent) {
+      return res.status(httpStatus.SERVICE_UNAVAILABLE).json({ success: false, message: "Couldn't send the email. Please try again." });
+    }
+    return res.json(genericOk);
+  } catch (error) {
+    console.error("Resend OTP Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
 //For sending otp if forgot password
 const forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
-
-    if (!email)
-      return res.status(400).json({
-        success: false,
-        message: "Email is required",
-      });
-
-    const user = await userModel.findOne({ email });
-
-    if (!user)
-      return res.status(404).json({
-        success: false,
-        message: "User not found with this email",
-      });
-
-    if (user.isGoogleAuth) {
-      return res.status(httpStatus.FORBIDDEN).json({
-        success: true,
-        message: "Login with google",
-      });
+    const email = asEmail(req.body.email);
+    if (!email) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Please enter a valid email" });
     }
 
-    if (!user.verified)
-      return res.status(400).json({
-        success: false,
-        message: "Email not verified. Please verify your account first.",
-      });
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    if (user.verified) {
-      user.verificationCode = otp;
-      user.otpExpiry = Date.now() + 90 * 1000;
-      await user.save();
-    }
-
-    const sent = await sendVerificationEmail(email, otp);
-
-    if (!sent) return res.status(500).json({ message: "Failed to send OTP" })
-
-    return res.status(200).json({
+    // Same answer whether or not the account exists, so this endpoint
+    // can't be used to discover who shops here.
+    const genericOk = {
       success: true,
-      message: "OTP sent to your registered email",
-    });
+      message: "If an account exists for this email, we've sent a 6-digit code.",
+      otpExpiresIn: OTP_TTL_MS / 1000,
+    };
+
+    const user = await findUserByEmail(email);
+    if (!user || !user.verified) return res.json(genericOk);
+
+    const wait = cooldownRemaining(user);
+    if (wait > 0) {
+      return res.status(httpStatus.TOO_MANY_REQUESTS).json({
+        success: false,
+        message: `Please wait ${wait} seconds before requesting another code.`,
+        retryAfter: wait,
+      });
+    }
+
+    const sent = await issueOtp(user);
+    if (!sent) {
+      return res.status(httpStatus.SERVICE_UNAVAILABLE).json({ success: false, message: "Couldn't send the email. Please try again." });
+    }
+    return res.json(genericOk);
   } catch (error) {
-    console.log(error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    console.error("Forgot Password Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
-//For verifying OTP for forgot password
+//For verifying OTP for forgot password: returns a short-lived, single-use reset token
 const verifyForgot = async (req, res) => {
   try {
-    const { email, otp } = req.body;
-
-    if (!otp) return res.status(400).json({ message: "OTP is required" });
-
-    const user = await userModel.findOne({ email });
-
-    if (!user) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid request" });
+    const email = asEmail(req.body.email);
+    const otp = asOtp(req.body.otp);
+    if (!email || !otp) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Enter the 6-digit code" });
     }
 
-    // Check if otp is expired
-    if (user.otpExpiry < Date.now()) {
-      user.verificationCode = null;
-      user.otpExpiry = null;
-      user.verificationExpireAt = null;
-      return res.status(400).json({
-        success: false,
-        message: "OTP expired. User is not verified.",
-      });
+    const user = await findUserByEmail(email);
+    if (!user || !user.verified) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "This code is invalid or has expired." });
     }
 
-    // WRONG OTP CHECK
-    const isMatch = otp == user.verificationCode;
-
-    if (!isMatch) {
-      user.verificationAttempts += 1;
-      await user.save();
-      if ((3 - user.verificationAttempts) == 0) {
-        user.verificationAttempts = 0;
-        await user.save();
-        return res.status(400).json({
-          success: false,
-          message:
-            "OTP could not verified."
-        });
-      }
-      return res.status(400).json({
-        success: false,
-        message:
-          "Incorrect OTP, attempts left: " + (3 - user.verificationAttempts),
-      });
+    const result = await checkOtp(user, otp);
+    if (!result.ok) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: result.message });
     }
 
-    // SUCCESS – VERIFY
+    const resetToken = generateResetToken();
     user.verificationCode = null;
     user.verificationAttempts = 0;
     user.otpExpiry = null;
-    user.verificationExpireAt = null;
-
+    user.resetTokenHash = hashSecret(resetToken);
+    user.resetTokenExp = new Date(Date.now() + RESET_TOKEN_TTL_MS);
     await user.save();
 
-    return res.status(200).json({
+    return res.status(httpStatus.OK).json({
       success: true,
-      message: "Email verified successfully",
+      message: "Code verified",
+      resetToken,
     });
   } catch (error) {
-    console.log(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Verify Forgot Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
-//For Reseting the password
+//For Reseting the password (requires the token from verifyForgot)
 const resetPassword = async (req, res) => {
   try {
-    const { email, newPassword } = req.body;
+    const email = asEmail(req.body.email);
+    const resetToken = asString(req.body.resetToken, { max: 128 });
+    const { newPassword } = req.body;
 
-    // INPUT CHECK
-    if (!newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "New password is required",
-      });
+    if (!email || !resetToken) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Your reset session has expired. Please start again." });
+    }
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: passwordError });
     }
 
-    //IF PASSWORD LENGTH <8
-    if (newPassword.length < 8) {
-      return res.status(httpStatus.BAD_REQUEST).json({
-        success: false,
-        message: "Password must have at least 8 characters",
-      });
+    const user = await findUserByEmail(email);
+    if (
+      !user || !user.resetTokenHash || !user.resetTokenExp ||
+      user.resetTokenExp.getTime() < Date.now() ||
+      !safeEqual(hashSecret(resetToken), user.resetTokenHash)
+    ) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: "Your reset session has expired. Please start again." });
     }
 
-    // FIND USER
-    const user = await userModel.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    // BLOCK GOOGLE AUTH USERS
-    if (user.isGoogleAuth) {
-      return res.status(403).json({
-        success: false,
-        message:
-          "This account uses Google Login. Password cannot be reset manually.",
-      });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // UPDATE PASSWORD
-    user.password = hashedPassword;
-
-    user.verificationCode = null;
-    user.otpExpiry = null;
-    user.verificationAttempts = 0;
-
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetTokenHash = null;
+    user.resetTokenExp = null;
+    // Sign out every existing session (e.g. a stolen cookie)
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
-    return res.status(200).json({
-      success: true,
-      message: "Password has been reset successfully",
-    });
+    return res.status(httpStatus.OK).json({ success: true, message: "Password has been reset. Please log in." });
   } catch (error) {
-    console.log(error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    console.error("Reset Password Error:", error);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "Something went wrong. Please try again." });
   }
 };
 
@@ -524,11 +535,13 @@ const getMyProfile = async (req, res) => {
     success: true,
     firstName: user.firstName,
     lastName: user.lastName,
+    username: `${user.firstName} ${user.lastName}`.trim(),
     email: user.email,
     mobile: user.mobile,
     pincode: user.pincode,
     birthdate: user.birthdate,
-    gender: user.gender
+    gender: user.gender,
+    isGoogleAuth: !!user.isGoogleAuth,
   });
 };
 
@@ -536,102 +549,71 @@ const getMyProfile = async (req, res) => {
 const updateProfile = async (req, res) => {
   try {
     const { firstName, lastName, mobile, pincode, birthdate, gender } = req.body;
+    const update = {};
+    const errors = [];
 
-    const updatedUser = await userModel.findByIdAndUpdate(
-      req.user._id,
-      {
-        firstName,
-        lastName,
-        mobile,
-        pincode,
-        birthdate,
-        gender
-      },
-      { new: true }
-    );
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User with this email not found.",
-      });
+    if (firstName !== undefined) {
+      const v = asString(firstName, { max: 50 });
+      v ? (update.firstName = v) : errors.push("First name is required");
+    }
+    if (lastName !== undefined) {
+      const v = asString(lastName, { max: 50 });
+      v ? (update.lastName = v) : errors.push("Last name is required");
+    }
+    if (mobile !== undefined && mobile !== null && mobile !== "") {
+      /^[6-9]\d{9}$/.test(String(mobile)) ? (update.mobile = Number(mobile)) : errors.push("Mobile number must be 10 digits");
+    }
+    if (pincode !== undefined && pincode !== null && pincode !== "") {
+      /^\d{6}$/.test(String(pincode)) ? (update.pincode = Number(pincode)) : errors.push("Pincode must be 6 digits");
+    }
+    if (birthdate !== undefined && birthdate !== null && birthdate !== "") {
+      const d = new Date(birthdate);
+      !Number.isNaN(d.getTime()) && d < new Date() ? (update.birthdate = d) : errors.push("Invalid birth date");
+    }
+    if (gender !== undefined && gender !== null && gender !== "") {
+      typeof gender === "string" && gender.length <= 20 ? (update.gender = gender) : errors.push("Invalid gender");
     }
 
-    return res.status(httpStatus.CREATED).json({
-      success: true,
-      message: "Profile updated successfully.",
-    });
+    if (errors.length) {
+      return res.status(httpStatus.BAD_REQUEST).json({ success: false, message: errors[0] });
+    }
 
+    const updatedUser = await userModel.findByIdAndUpdate(req.user._id, { $set: update }, { new: true });
+    if (!updatedUser) {
+      return res.status(httpStatus.NOT_FOUND).json({ success: false, message: "Account not found." });
+    }
+
+    return res.status(httpStatus.OK).json({ success: true, message: "Profile updated successfully." });
   } catch (error) {
     console.error("Profile Update Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An error occurred while updating the profile.",
-    });
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "An error occurred while updating the profile." });
   }
-}
+};
 
 //For deleting the account
 const deleteAccount = async (req, res) => {
   try {
-    const userId = req.user._id;
-
-    // Delete the user from the database
-    const deletedUser = await userModel.findByIdAndDelete(userId);
-
+    const deletedUser = await userModel.findByIdAndDelete(req.user._id);
     if (!deletedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User account could not be found.",
-      });
+      return res.status(httpStatus.NOT_FOUND).json({ success: false, message: "User account could not be found." });
     }
 
-    // Clear the authentication cookie
-    res.clearCookie("token", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Your account has been permanently deleted.",
-    });
-
+    clearAuthCookie(res);
+    return res.status(httpStatus.OK).json({ success: true, message: "Your account has been permanently deleted." });
   } catch (error) {
     console.error("Delete Account Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An error occurred while deleting the account.",
-    });
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "An error occurred while deleting the account." });
   }
 };
 
-//For logout 
+//For logout
 const logoutUser = (req, res) => {
-  try {
-    // Clear the cookie
-    res.clearCookie("token", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Logged out successfully"
-    });
-
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Error during logout"
-    });
-  }
+  clearAuthCookie(res);
+  return res.status(httpStatus.OK).json({ success: true, message: "Logged out successfully" });
 };
 
 export {
-  loginUser, registerUser, verifyEmail,
+  loginUser, registerUser, verifyEmail, resendOtp, verifyAdmin,
   withGoogle, getMyProfile, updateProfile, deleteAccount,
   forgotPassword, verifyForgot, resetPassword,
   logoutUser,

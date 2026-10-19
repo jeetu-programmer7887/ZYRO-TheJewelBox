@@ -2,10 +2,11 @@ import { useMemo, useContext, useState, useEffect, useRef } from 'react'
 import HeroSection from '../../Components/HeroSection'
 import Cards from '../../Components/Cards'
 import SkeletonCard from '../../Components/Skeleton'
+import { Link } from 'react-router-dom'
 import { ShopContext } from '../../config/ShopContext'
 
 const Earrings = () => {
-  const { allProducts } = useContext(ShopContext);
+  const { allProducts, productsLoading } = useContext(ShopContext);
 
   // 1. State for pagination and loading
   const [visibleCount, setVisibleCount] = useState(12);
@@ -55,7 +56,7 @@ const Earrings = () => {
   return (
     <>
       <HeroSection
-        bgImage="/images/earring.jpg"
+        bgImage="/images/earring.webp"
         title={"EARRINGS"}
         subtitles={["Elevate Your Style with Every Dangle"]}
         topTitle={"60"}
@@ -98,17 +99,17 @@ const Earrings = () => {
                   image: item.thumbnail || item.images?.[0],
                   price: item.price,
                   originalPrice: item.comparePrice,
-                  variants: item.variants,
-                  discount: item.comparePrice
-                    ? Math.round(((item.comparePrice - item.price) / item.comparePrice) * 100)
-                    : 0
+                  variants: item.variants
                 }}
               />
             ))
+          ) : productsLoading ? (
+            Array.from({ length: 8 }).map((_, index) => <SkeletonCard key={index} />)
           ) : (
-            Array.from({ length: 8 }).map((_, index) => (
-              <SkeletonCard key={index} />
-            ))
+            <div className="col-span-full text-center py-16">
+              <p className="text-gray-500 para mb-4">No products in this collection yet.</p>
+              <Link to="/new-arrivals" className="text-(--color-green) underline">Explore our new arrivals</Link>
+            </div>
           )}
         </div>
 

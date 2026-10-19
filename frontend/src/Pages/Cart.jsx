@@ -1,36 +1,53 @@
-import React, { useContext, useState, useEffect, useMemo } from 'react';
+import React, { useContext, useEffect, useMemo, useRef } from 'react';
+import axios from 'axios';
 import { AiOutlineMinus, AiOutlinePlus } from 'react-icons/ai';
 import { ShopContext } from '../config/ShopContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { RxCross2 } from "react-icons/rx";
 import { motion, AnimatePresence } from "framer-motion";
 import { IoWarningOutline, IoRocketOutline, IoCheckmarkCircle } from "react-icons/io5";
+import { optimizeImage } from '../Utility/image';
 
 const Cart = () => {
-  const { currency, deliveryFee, updateQuantity, cartData, allProducts } = useContext(ShopContext);
-  const [loading, setLoading] = useState(true);
+  const { currency, deliveryFee, updateQuantity, cartData, cartItems, allProducts, productsLoading, cartLoading, backendUrl } = useContext(ShopContext);
   const navigate = useNavigate();
+  // Only show the loader while the product list is genuinely loading
+  const loading = (productsLoading && !allProducts.length) || cartLoading;
 
+  // Drop cart entries whose product was deleted or deactivated, so the bag and
+  // the navbar badge agree. Confirm with the server first: the product list
+  // may be a few minutes stale.
+  const checkedMissing = useRef(new Set());
   useEffect(() => {
-    if (cartData) {
-      const timer = setTimeout(() => setLoading(false), 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [cartData]);
+    if (productsLoading || !allProducts.length) return;
+    const known = new Set(allProducts.map(p => p._id));
+    const missing = Object.keys(cartItems).filter(id =>
+      cartItems[id] > 0 && !known.has(id) && !checkedMissing.current.has(id)
+    );
+    missing.forEach(async (id) => {
+      checkedMissing.current.add(id);
+      try {
+        await axios.get(`${backendUrl}/api/products/details/${id}`);
+      } catch (error) {
+        if (error.response?.status === 404) updateQuantity(id, 0);
+      }
+    });
+  }, [cartItems, allProducts, productsLoading, backendUrl, updateQuantity]);
 
   // --- STOCK VALIDATION LOGIC ---
   const validatedCart = useMemo(() => {
     return cartData.map(item => {
-      const originalProduct = allProducts.find(p => p._id === item._id);
-      const totalStock = originalProduct?.variants?.reduce((acc, v) => acc + (v.stock || 0), 0) ?? 0;
+      const totalStock = item.variants?.reduce((acc, v) => acc + (Number(v.stock) || 0), 0) ?? 0;
       return {
         ...item,
-        isOutOfStock: totalStock <= 0
+        availableStock: totalStock,
+        isOutOfStock: totalStock <= 0,
+        exceedsStock: totalStock > 0 && item.quantity > totalStock,
       };
     });
-  }, [cartData, allProducts]);
+  }, [cartData]);
 
-  const hasOutOfStockItems = useMemo(() => validatedCart.some(item => item.isOutOfStock), [validatedCart]);
+  const hasOutOfStockItems = useMemo(() => validatedCart.some(item => item.isOutOfStock || item.exceedsStock), [validatedCart]);
 
   // --- SHIPPING LOGIC ---
   const freeShippingThreshold = 500;
@@ -100,8 +117,10 @@ const Cart = () => {
                     >
                       <Link to={`/product/${item.id}`} className="shrink-0 group relative">
                         <img
-                          src={item.thumbnail || item.images?.[0]}
+                          src={optimizeImage(item.thumbnail || item.images?.[0], 400)}
                           alt={item.title}
+                          loading="lazy"
+                          decoding="async"
                           className={`rounded-lg w-24 h-24 md:w-32 md:h-32 lg:w-[25vh] lg:h-auto object-cover ${item.isOutOfStock ? 'opacity-50' : ''}`}
                         />
                         {item.isOutOfStock && (
@@ -121,26 +140,43 @@ const Cart = () => {
                               <p className="text-red-600 text-xs font-bold flex items-center gap-1">
                                 <IoWarningOutline size={16} /> Remove this item to proceed.
                               </p>
+                            ) : item.exceedsStock ? (
+                              <p className="text-red-600 text-xs font-bold flex items-center gap-1">
+                                <IoWarningOutline size={16} /> Only {item.availableStock} left. Please reduce the quantity.
+                              </p>
                             ) : (
                               <p className="text-gray-500 text-[10px] md:text-[12px] lg:text-sm mb-4">
                                 <span className='border rounded-full px-2 lg:px-3 border-gray-300'>Material: {item.material}</span>
                               </p>
                             )}
                           </div>
-                          <button onClick={() => updateQuantity(item._id, 0)} className="text-gray-500 cursor-pointer hover:text-black transition-colors p-1">
+                          <button onClick={() => updateQuantity(item._id, 0)} aria-label={`Remove ${item.title} from bag`} className="text-gray-500 cursor-pointer hover:text-black transition-colors p-1">
                             <RxCross2 size={22} />
                           </button>
                         </div>
 
                         <div className="flex items-center justify-between mt-auto">
-                          <div className={`flex items-center border rounded-lg px-1 lg:px-2 py-1 ${item.isOutOfStock ? 'border-red-200 bg-red-100/50' : 'border-gray-300'}`}>
-                            <button onClick={() => updateQuantity(item._id, item.quantity - 1)} disabled={item.quantity <= 1 || item.isOutOfStock} className="p-1 lg:p-2 disabled:opacity-30">
-                              <AiOutlineMinus size={14} />
-                            </button>
-                            <span className="px-3 lg:px-4 font-semibold text-sm lg:text-base">{item.quantity}</span>
-                            <button onClick={() => updateQuantity(item._id, item.quantity + 1)} disabled={item.isOutOfStock} className="p-1 lg:p-2 disabled:opacity-30">
-                              <AiOutlinePlus size={14} />
-                            </button>
+                          <div className="flex flex-col items-start gap-1">
+                            <div className={`flex items-center border rounded-lg px-1 lg:px-2 py-1 ${item.isOutOfStock || item.exceedsStock ? 'border-red-200 bg-red-100/50' : 'border-gray-300'}`}>
+                              <button
+                                onClick={() => updateQuantity(item._id, item.exceedsStock ? item.availableStock : item.quantity - 1)}
+                                disabled={item.quantity <= 1 || item.isOutOfStock}
+                                aria-label="Decrease quantity"
+                                className="p-1 lg:p-2 disabled:opacity-30">
+                                <AiOutlineMinus size={14} />
+                              </button>
+                              <span className="px-3 lg:px-4 font-semibold text-sm lg:text-base">{item.quantity}</span>
+                              <button
+                                onClick={() => updateQuantity(item._id, item.quantity + 1)}
+                                disabled={item.isOutOfStock || item.quantity >= item.availableStock}
+                                aria-label="Increase quantity"
+                                className="p-1 lg:p-2 disabled:opacity-30 disabled:cursor-not-allowed">
+                                <AiOutlinePlus size={14} />
+                              </button>
+                            </div>
+                            {!item.isOutOfStock && !item.exceedsStock && item.availableStock <= 5 && (
+                              <span className="text-[10px] lg:text-xs text-amber-700 font-medium">Only {item.availableStock} left</span>
+                            )}
                           </div>
                           <div className={`text-right text-base lg:text-lg font-semibold ${item.isOutOfStock ? 'text-gray-400 line-through' : ''}`}>
                             {currency}{item.price * item.quantity}
@@ -203,7 +239,7 @@ const Cart = () => {
                   {/* Stock Warning */}
                   {hasOutOfStockItems && (
                     <div className="bg-red-50 border border-red-200 p-3 rounded-lg mb-4 text-red-700 text-xs">
-                      Please remove out-of-stock items to continue.
+                      Please remove out-of-stock items or reduce quantities to continue.
                     </div>
                   )}
 

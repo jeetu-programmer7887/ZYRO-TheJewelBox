@@ -1,4 +1,3 @@
-import { clamp } from 'framer-motion';
 import { useState, useEffect } from 'react';
 
 // --- Internal Typewriter Component ---
@@ -62,7 +61,9 @@ const HeroSection = ({
       <div className="absolute inset-0 w-full h-full">
         <img
           src={bgImage}
-          alt="Hero Background"
+          alt=""
+          fetchPriority="high"
+          decoding="async"
           className="w-full h-full object-cover object-center md:object-center" 
         />
       </div>

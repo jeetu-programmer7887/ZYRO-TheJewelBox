@@ -78,8 +78,8 @@ const Profile = () => {
         firstName: user.firstName || "",
         lastName: user.lastName || "",
         email: user.email || "",
-        mobile: user.mobile || "",
-        pincode: user.pincode || "",
+        mobile: user.mobile ? String(user.mobile) : "",
+        pincode: user.pincode ? String(user.pincode) : "",
         birthdate: user.birthdate ? user.birthdate.split("T")[0] : "",
         gender: user.gender || "",
       });
@@ -118,13 +118,16 @@ const Profile = () => {
       }
     }
 
-    if (formData.pincode && formData.pincode.length !== 6) {
+    const mobile = String(formData.mobile || "").trim();
+    const pincode = String(formData.pincode || "").trim();
+
+    if (pincode && !/^\d{6}$/.test(pincode)) {
       toast.error("Pincode must be exactly 6 digits.");
       return;
     }
 
-    if (formData.mobile.length !== 10) {
-      toast.error("Mobile number must be exactly 10 digits.");
+    if (mobile && !/^[6-9]\d{9}$/.test(mobile)) {
+      toast.error("Please enter a valid 10-digit mobile number.");
       return;
     }
 
@@ -171,7 +174,7 @@ const Profile = () => {
         toast.success(data.message || "Logged out successfully");
         setTimeout(() => { window.location.href = '/'; }, 1500);
       }
-    } catch (err) {
+    } catch {
       toast.error("Logout failed. Please try again.");
     }
   };

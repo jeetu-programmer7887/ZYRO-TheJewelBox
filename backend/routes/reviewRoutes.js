@@ -1,13 +1,12 @@
 import express from 'express';
-import multer from 'multer';
 import { authUser } from '../middleware/authUser.js';
 import { authAdmin } from '../middleware/authAdmin.js';
+import { memoryImageUpload } from '../middleware/multer.js';
 import { submitReview, getProductReviews, checkReviewed, getAllReviews, getAllHomeReviews, deleteReview, toggleFeaturedReview } from '../controllers/reviewController.js';
 
 const reviewRouter = express.Router();
 
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const upload = memoryImageUpload;
 
 reviewRouter.get('/all-home', getAllHomeReviews);
 
