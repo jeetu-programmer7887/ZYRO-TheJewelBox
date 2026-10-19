@@ -14,12 +14,15 @@ export const getRedirectTarget = (location, fallback = '/') => {
 };
 
 export const completeLogin = ({ role, data, setUser, navigate, destination }) => {
-  try { localStorage.setItem('role', role); } catch { /* ignore */ }
   navigate(destination, { replace: true });
+  // Login responses carry the same full profile as /api/user/session, so the
+  // app has everything (name, mobile, pincode...) without reloading.
+  const profile = data?.user || {};
   setUser({
-    ...data,
-    username: data?.username || (role === 'admin' ? 'ADMIN PANEL' : ''),
-    email: data?.email,
+    ...profile,
+    role: data?.role || role,
+    username: profile.username || data?.username || (role === 'admin' ? 'ADMIN PANEL' : ''),
+    email: profile.email || data?.email,
     isLoggedIn: true,
   });
 };

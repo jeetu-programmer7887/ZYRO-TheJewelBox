@@ -1,8 +1,12 @@
-import React, { useEffect, useState, useContext } from 'react';
+import { useEffect, useState, useContext, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { NavLink } from 'react-router-dom';
+import { toast } from 'react-toastify';
 import { ShopContext } from '../../config/ShopContext';
-import Swal from 'sweetalert2';
+import { PaymentBadge, RefundNote } from '../../Components/orders/OrderParts';
+import { orderIdOf, shortOrderId, formatDate, formatMoney, apiMessage } from '../../Components/orders/orderFormat';
+
+const RETURN_STATUSES = ['Return Requested', 'Returned'];
 
 const Returns = () => {
   const [returnedOrders, setReturnedOrders] = useState([]);
@@ -10,52 +14,34 @@ const Returns = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const { currency, backendUrl } = useContext(ShopContext);
 
+  const loadedRef = useRef(false);
+
   const handleCopyId = (id) => {
     navigator.clipboard.writeText(id);
-    Swal.fire({
-      toast: true,
-      position: 'top-end',
-      icon: 'success',
-      title: 'Order ID copied',
-      showConfirmButton: false,
-      timer: 1500,
-      timerProgressBar: true,
-    });
+    toast.success('Order ID copied');
   };
 
-  const fetchReturnedOrders = async () => {
-    if (returnedOrders.length > 0) setIsRefreshing(true);
+  const fetchReturnedOrders = useCallback(async () => {
+    if (loadedRef.current) setIsRefreshing(true);
     else setLoading(true);
 
     try {
       const response = await axios.get(`${backendUrl}/api/order/userorders`);
       if (response.data.success) {
-        let onlyReturned = [];
-        response.data.orders.forEach((order) => {
-          if (order.status === "Returned" || order.status === "Return Requested") {
-            order.items.forEach((item) => {
-              onlyReturned.push({
-                ...item,
-                orderId: order._id?.$oid || order._id,
-                status: order.status,
-                returnReason: order.returnReason || null,
-                createdAt: order.createdAt?.$date || order.createdAt,
-                deliveryDate: order.deliveryDate,
-              });
-            });
-          }
-        });
-        setReturnedOrders(onlyReturned);
+        // OrderView[] from the server; this page only filters by status
+        setReturnedOrders((response.data.orders || []).filter((order) => RETURN_STATUSES.includes(order.status)));
+        loadedRef.current = true;
       }
     } catch (error) {
       console.error('Fetch Error:', error);
+      toast.error(apiMessage(error, "Couldn't load your orders. Please try again."));
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [backendUrl]);
 
-  useEffect(() => { fetchReturnedOrders(); }, []);
+  useEffect(() => { fetchReturnedOrders(); }, [fetchReturnedOrders]);
 
   return (
     <div className='bg-white lg:min-h-9/12 lg:mx-5 lg:mt-5 space-y-5 lg:p-5 border border-(--color-green)/20 shadow-2xl rounded-lg'>
@@ -110,65 +96,75 @@ const Returns = () => {
 
       ) : (
         <div className="space-y-4">
-          {returnedOrders.map((item, index) => {
-            const productId = item.productId?.$oid || item.productId;
-            const isPending = item.status === 'Return Requested';
+          {returnedOrders.map((order) => {
+            const orderId = orderIdOf(order);
+            const isPending = order.status === 'Return Requested';
             return (
-              <div key={index}
-                className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-300 hover:bg-white hover:shadow-xl group
+              <div key={orderId}
+                className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-start justify-between gap-4 transition-all duration-300 hover:bg-white hover:shadow-xl group
                   ${isPending
                     ? 'bg-orange-50/30 border-orange-100 hover:border-orange-200'
                     : 'bg-gray-50/30 border-gray-100 hover:border-rose-200'}`}>
 
-                {/* Left: image + details */}
-                <div className="flex gap-5">
-                  <NavLink to={`/product/${productId}`}>
-                    <img className='w-20 h-20 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform opacity-80'
-                      src={item.image} alt={item.title} />
-                  </NavLink>
-
-                  {/* Middle: product details */}
-                  <div className="flex-1 min-w-0 space-y-2.5">
-                    <div>
-                      <NavLink to={`/product/${productId}`}>
-                        <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors cursor-pointer">{item.title}</h3>
-                      </NavLink>
-                      <p className="text-sm text-gray-600">{currency}{item.price} • Qty: {item.quantity}</p>
-
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
-                          Ordered: {new Date(item.createdAt).toLocaleDateString()}
-                        </span>
-                        {item.deliveryDate && (
-                          <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
-                            Delivered: {new Date(item.deliveryDate).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Return reason */}
-                      {item.returnReason && (
-                        <div className={`mt-2 text-[11px] px-2 py-1 rounded-lg w-fit border
-                          ${isPending
-                            ? 'text-orange-600 bg-orange-50 border-orange-100'
-                            : 'text-rose-600 bg-rose-50 border-rose-100'}`}>
-                          📝 Reason: <span className="font-semibold">{item.returnReason}</span>
-                        </div>
-                      )}
-                    </div>
+                {/* Left: order details + items */}
+                <div className="flex-1 min-w-0 space-y-3">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <button onClick={() => handleCopyId(orderId)}
+                      className="font-mono text-[11px] font-semibold text-(--color-green) bg-white border border-gray-100 px-2 py-0.5 rounded cursor-pointer hover:bg-(--color-green) hover:text-(--color-gold) transition-all">
+                      #{shortOrderId(order)}
+                    </button>
+                    <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
+                      Ordered: {formatDate(order.createdAt)}
+                    </span>
+                    {order.deliveryDate && (
+                      <span className="text-[10px] font-medium border border-gray-200 bg-white px-2 py-0.5 rounded text-gray-400">
+                        Delivered: {formatDate(order.deliveryDate)}
+                      </span>
+                    )}
+                    <PaymentBadge order={order} />
                   </div>
+
+                  {order.items.map((item, index) => {
+                    const productId = item.productId?.$oid || item.productId;
+                    return (
+                      <div key={`${productId}_${index}`} className="flex gap-5 items-center">
+                        <NavLink to={`/product/${productId}`}>
+                          <img className='w-20 h-20 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform opacity-80'
+                            src={item.image} alt={item.title} />
+                        </NavLink>
+                        <div className="min-w-0">
+                          <NavLink to={`/product/${productId}`}>
+                            <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors cursor-pointer">{item.title}</h3>
+                          </NavLink>
+                          <p className="text-sm text-gray-600">{formatMoney(currency, item.price)} • Qty: {item.quantity}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Return reason */}
+                  {order.returnReason && (
+                    <div className={`text-[11px] px-2 py-1 rounded-lg w-fit border
+                      ${isPending
+                        ? 'text-orange-600 bg-orange-50 border-orange-100'
+                        : 'text-rose-600 bg-rose-50 border-rose-100'}`}>
+                      📝 Reason: <span className="font-semibold">{order.returnReason}</span>
+                    </div>
+                  )}
+                  <RefundNote order={order} currency={currency} />
                 </div>
 
                 {/* Right: status + badge */}
-                <div className="flex items-center justify-between md:w-1/3 border-t md:border-t-0 pt-4 md:pt-0">
+                <div className="flex md:flex-col items-center md:items-end justify-between gap-3 md:w-1/3 border-t md:border-t-0 pt-4 md:pt-0">
                   <div className="flex items-center gap-2">
                     <span className={`w-2.5 h-2.5 rounded-full ${
                       isPending
                         ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]'
                         : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.4)]'
                     }`} />
-                    <span className="text-sm font-semibold text-gray-700">{item.status}</span>
+                    <span className="text-sm font-semibold text-gray-700">{order.status}</span>
                   </div>
+                  <p className="text-sm font-bold text-(--color-green)">{formatMoney(currency, order.pricing?.total ?? order.amount)}</p>
 
                   {/* Coins deducted badge — only for fully returned */}
                   {!isPending && (

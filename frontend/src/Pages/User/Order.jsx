@@ -1,21 +1,23 @@
-import { useEffect, useState, useContext } from 'react';
+import { useEffect, useState, useContext, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { NavLink } from 'react-router-dom';
 import { ShopContext } from '../../config/ShopContext';
 import Swal from 'sweetalert2';
 import { toast } from 'react-toastify';
+import { openRazorpayCheckout } from '../../Utility/razorpay';
+import { PaymentBadge, PriceBreakdown, RefundNote, PayCountdown } from '../../Components/orders/OrderParts';
+import { orderIdOf, shortOrderId, formatDate, formatDateTime, formatMoney, apiMessage } from '../../Components/orders/orderFormat';
 
-const statusConfig = {
-  Delivered:     { dot: 'bg-emerald-400', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-100' },
-  Packing:       { dot: 'bg-amber-400',   text: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-100'   },
-  'Order Placed':{ dot: 'bg-blue-400',    text: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-100'    },
-  Shipped:       { dot: 'bg-violet-400',  text: 'text-violet-700',  bg: 'bg-violet-50',  border: 'border-violet-100'  },
-};
+// These have their own pages (Cancelled / Returns); this is only a view filter.
+const HIDDEN_HERE = ['Cancelled', 'Return Requested', 'Returned'];
 
 const Orders = () => {
-  const [orders, setOrders] = useState([]);
+  const [orders, setOrders] = useState([]); // OrderView[] straight from the server
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [busy, setBusy] = useState({}); // { [orderId]: 'cancel' | 'return' | 'pay' }
+  const busyRef = useRef(new Set());
+  const loadedRef = useRef(false);
   const { currency, backendUrl } = useContext(ShopContext);
 
   const handleCopyId = (id) => {
@@ -78,41 +80,29 @@ const Orders = () => {
         Swal.fire('Error', response.data.message, 'error');
       }
     } catch (error) {
-      Swal.fire('Error', 'Could not submit review', 'error');
+      Swal.fire('Error', apiMessage(error, 'Could not submit review'), 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const fetchOrders = async () => {
-    if (orders.length > 0) setIsRefreshing(true);
+  const fetchOrders = useCallback(async () => {
+    if (loadedRef.current) setIsRefreshing(true);
     else setLoading(true);
     try {
       const response = await axios.get(`${backendUrl}/api/order/userorders`);
       if (response.data.success) {
-        let allOrdersItem = [];
-        response.data.orders.forEach((order) => {
-          if (order.status !== "Cancelled" && order.status !== "Pending Payment" && order.status !== "Returned" && order.status !== "Return Requested") {
-            order.items.forEach((item) => {
-              allOrdersItem.push({
-                ...item,
-                orderId: order._id?.$oid || order._id,
-                status: order.status,
-                payment: order.payment,
-                paymentMethod: order.paymentMethod,
-                createdAt: order.createdAt?.$date || order.createdAt,
-                deliveryDate: order.deliveryDate,
-              });
-            });
-          }
-        });
-        setOrders(allOrdersItem);
+        const allOrders = response.data.orders || [];
+        setOrders(allOrders);
+        loadedRef.current = true;
 
         // Check which products are already reviewed
-        const deliveredItems = allOrdersItem.filter(i => i.status === 'Delivered');
-        if (deliveredItems.length > 0) {
+        const reviewableItems = allOrders
+          .filter(o => o.actions?.canReview)
+          .flatMap(o => o.items.map(item => ({ orderId: orderIdOf(o), productId: item.productId?.$oid || item.productId })));
+        if (reviewableItems.length > 0) {
           const reviewChecks = await Promise.all(
-            deliveredItems.map(item =>
+            reviewableItems.map(item =>
               axios.get(`${backendUrl}/api/review/check/${item.productId}/${item.orderId}`, {
                 withCredentials: true
               }).then(res => ({
@@ -131,17 +121,47 @@ const Orders = () => {
       }
     } catch (error) {
       console.error('Fetch Error:', error);
+      toast.error(apiMessage(error, "Couldn't load your orders. Please try again."));
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
+  }, [backendUrl]);
+
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  // Swap in the server's latest view of one order
+  const replaceOrder = (updated) => {
+    if (!updated) return;
+    const id = orderIdOf(updated);
+    setOrders(prev => prev.map(o => (orderIdOf(o) === id ? updated : o)));
+  };
+
+  // One request per order at a time (ref guards against fast double clicks)
+  const begin = (orderId, action) => {
+    if (busyRef.current.has(orderId)) return false;
+    busyRef.current.add(orderId);
+    setBusy(prev => ({ ...prev, [orderId]: action }));
+    return true;
+  };
+  const end = (orderId) => {
+    busyRef.current.delete(orderId);
+    setBusy(prev => {
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
   };
 
   const cancelOrderHandler = async (orderId) => {
-    const result = await Swal.fire({
-      title: 'Are you sure?',
+    if (busyRef.current.has(orderId)) return;
+    const { isConfirmed, value } = await Swal.fire({
+      title: 'Cancel this order?',
       text: "This will cancel all the products included in the order.",
       icon: 'warning',
+      input: 'textarea',
+      inputPlaceholder: 'Reason for cancelling (optional)',
+      inputAttributes: { maxlength: '300' },
       showCancelButton: true,
       confirmButtonColor: '#2e4a3e',
       cancelButtonColor: '#d33',
@@ -149,24 +169,28 @@ const Orders = () => {
       cancelButtonText: 'No, keep it',
       scrollbarPadding: false
     });
-    if (result.isConfirmed) {
-      try {
-        const response = await axios.patch(`${backendUrl}/api/order/cancel`, { orderId }, {
-          withCredentials: true
-        });
-        if (response.data.success) {
-          Swal.fire({ title: 'Cancelled!', text: 'Order cancelled successfully.', icon: 'success', confirmButtonColor: '#2e4a3e', scrollbarPadding: false });
-          fetchOrders();
-        } else {
-          Swal.fire('Error', response.data.message || 'Could not cancel order', 'error');
-        }
-      } catch (error) {
-        Swal.fire('Error', 'Server error. Please try again later.', 'error');
+    if (!isConfirmed || !begin(orderId, 'cancel')) return;
+    try {
+      const reason = (value || '').trim();
+      const { data } = await axios.patch(`${backendUrl}/api/order/cancel`, { orderId, ...(reason ? { reason } : {}) }, {
+        withCredentials: true
+      });
+      if (data.success) {
+        replaceOrder(data.order);
+        toast.success(data.message || 'Order cancelled');
+      } else {
+        toast.error(data.message || 'Could not cancel order');
       }
+    } catch (error) {
+      if (error.response?.data?.order) replaceOrder(error.response.data.order);
+      toast.error(apiMessage(error, 'Could not cancel order. Please try again.'));
+    } finally {
+      end(orderId);
     }
   };
 
   const returnOrderHandler = async (orderId) => {
+    if (busyRef.current.has(orderId)) return;
     const { value: reason, isConfirmed } = await Swal.fire({
       title: 'Request Return',
       html: `
@@ -191,39 +215,87 @@ const Orders = () => {
       }
     });
 
-    if (isConfirmed && reason) {
-      try {
-        const response = await axios.patch(
-          `${backendUrl}/api/order/return-request`,
-          { orderId, reason },
-          { withCredentials: true }
-        );
-        if (response.data.success) {
-          Swal.fire({
-            title: 'Return Requested!',
-            text: 'Your return request has been submitted. Our team will review it shortly.',
-            icon: 'success',
-            confirmButtonColor: '#2e4a3e',
-            scrollbarPadding: false
-          });
-          fetchOrders();
-        } else {
-          Swal.fire('Error', response.data.message || 'Could not submit return request', 'error');
-        }
-      } catch (error) {
-        Swal.fire('Error', 'Server error. Please try again later.', 'error');
+    if (!isConfirmed || !reason || !begin(orderId, 'return')) return;
+    try {
+      const { data } = await axios.patch(
+        `${backendUrl}/api/order/return-request`,
+        { orderId, reason },
+        { withCredentials: true }
+      );
+      if (data.success) {
+        replaceOrder(data.order);
+        toast.success(data.message || 'Return request submitted');
+      } else {
+        toast.error(data.message || 'Could not submit return request');
       }
+    } catch (error) {
+      if (error.response?.data?.order) replaceOrder(error.response.data.order);
+      toast.error(apiMessage(error, 'Could not submit return request. Please try again.'));
+    } finally {
+      end(orderId);
     }
   };
 
-  useEffect(() => { fetchOrders(); }, []);
+  const payNowHandler = async (order) => {
+    const orderId = orderIdOf(order);
+    if (!begin(orderId, 'pay')) return;
+    try {
+      let start;
+      try {
+        ({ data: start } = await axios.post(`${backendUrl}/api/order/${orderId}/pay`, {}, { withCredentials: true }));
+      } catch (error) {
+        if (error.response?.data?.order) replaceOrder(error.response.data.order);
+        toast.error(apiMessage(error, "Couldn't start the payment. Please try again."));
+        return;
+      }
+      if (start.order) replaceOrder(start.order);
+      if (!start.checkout) {
+        toast.info(start.message || 'This order no longer needs payment.');
+        return;
+      }
+
+      let gatewayResponse;
+      try {
+        gatewayResponse = await openRazorpayCheckout(start.checkout);
+      } catch (error) {
+        if (error.code === 'DISMISSED') {
+          const until = start.checkout.expiresAt || order.paymentExpiresAt;
+          toast.info(until
+            ? `Payment not completed. You can pay later from My Orders until ${formatDateTime(until)}.`
+            : 'Payment not completed. You can pay later from My Orders.');
+        } else if (error.code === 'PAYMENT_FAILED') {
+          toast.error(error.description || error.message || 'Payment failed');
+        } else {
+          toast.error(error.message || "Couldn't open the payment window.");
+        }
+        return;
+      }
+
+      try {
+        const { data } = await axios.post(`${backendUrl}/api/order/verify-razorpay`, {
+          razorpay_order_id: gatewayResponse.razorpay_order_id,
+          razorpay_payment_id: gatewayResponse.razorpay_payment_id,
+          razorpay_signature: gatewayResponse.razorpay_signature,
+        }, { withCredentials: true });
+        if (data.order) replaceOrder(data.order);
+        if (data.success) toast.success(data.message || 'Payment successful');
+        else toast.error(data.message || "We couldn't confirm this payment yet.");
+      } catch (error) {
+        if (error.response?.data?.order) replaceOrder(error.response.data.order);
+        toast.error(apiMessage(error, "We couldn't confirm this payment yet. Please check My Orders in a minute."));
+      }
+    } finally {
+      end(orderId);
+    }
+  };
 
   const getStatusDot = (status) => {
     if (status === 'Delivered')        return 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]';
-    if (status === 'Return Requested') return 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]';
-    if (status === 'Returned')         return 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]';
+    if (status === 'Pending Payment')  return 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]';
     return 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]';
   };
+
+  const visibleOrders = orders.filter(o => !HIDDEN_HERE.includes(o.status));
 
   return (
     <div className='bg-white lg:min-h-9/12 lg:mx-5 lg:mt-5 space-y-5 lg:p-5 border border-(--color-green)/20 shadow-2xl rounded-lg'>
@@ -267,7 +339,7 @@ const Orders = () => {
           </p>
         </div>
 
-      ) : orders.length === 0 ? (
+      ) : visibleOrders.length === 0 ? (
         <div className="content rounded-xl flex flex-col items-center justify-center min-h-[60vh] bg-(--color-lightgray)/40">
           <lord-icon src="https://cdn.lordicon.com/qfijwmqj.json" trigger="hover" colors="primary:#2e4a3e,secondary:#c6a664" style={{ width: "100px", height: "100px" }} />
           <p className='mt-4 text-gray-600 font-medium'>You don't have any active orders.</p>
@@ -279,67 +351,103 @@ const Orders = () => {
 
       ) : (
         <div className="space-y-3">
-          {orders.map((item, index) => {
-            const productId = item.productId?.$oid || item.productId;
-            const status = statusConfig[item.status] || statusConfig['Order Placed'];
+          {visibleOrders.map((order) => {
+            const orderId = orderIdOf(order);
+            const actions = order.actions || {};
+            const busyAction = busy[orderId];
+            const isBusy = !!busyAction;
 
             return (
-              <div key={index}
-                className="p-4 bg-white rounded-xl border border-gray-100 flex flex-col lg:flex-row lg:items-center gap-4 transition-all duration-300 hover:border-(--color-green)/30 hover:shadow-md group">
+              <div key={orderId}
+                className="p-4 bg-white rounded-xl border border-gray-100 space-y-4 transition-all duration-300 hover:border-(--color-green)/30 hover:shadow-md group">
 
-                {/* Product Info */}
-                <div className="flex flex-1 gap-4 items-center">
-                  <NavLink to={`/product/${productId}`}>
-                    <img className='w-16 h-16 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform' src={item.image} alt={item.title} />
-                  </NavLink>
-                  <div className="flex-1 min-w-0">
-                    <NavLink to={`/product/${productId}`}>
-                      <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors truncate">{item.title}</h3>
-                    </NavLink>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {currency}{item.price} • Qty: {item.quantity} • {new Date(item.createdAt).toLocaleDateString()}
-                    </p>
+                {/* Order header */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={() => handleCopyId(orderId)}
+                      className="font-mono text-[11px] font-semibold text-(--color-green) bg-gray-50 border border-gray-100 px-2 py-1 rounded-lg hover:bg-(--color-green) hover:text-(--color-gold) transition-all cursor-pointer">
+                      #{shortOrderId(order)}
+                    </button>
+                    <span className="text-xs text-gray-500">Placed {formatDate(order.createdAt)}</span>
+                    <PaymentBadge order={order} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${getStatusDot(order.status)}`} />
+                    <span className="text-sm font-semibold text-gray-700 uppercase tracking-tight">{order.status}</span>
                   </div>
                 </div>
 
-                {/* Status */}
-                <div className="flex items-center gap-2 lg:w-40 shrink-0">
-                  <span className={`w-2.5 h-2.5 rounded-full ${getStatusDot(item.status)}`} />
-                  <span className="text-sm font-semibold text-gray-700 uppercase tracking-tight">{item.status}</span>
+                {/* Items */}
+                <div className="space-y-3">
+                  {order.items.map((item, index) => {
+                    const productId = item.productId?.$oid || item.productId;
+                    const reviewKey = `${orderId}_${productId}`;
+                    return (
+                      <div key={`${productId}_${index}`} className="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div className="flex flex-1 gap-4 items-center min-w-0">
+                          <NavLink to={`/product/${productId}`}>
+                            <img className='w-16 h-16 object-cover rounded-lg shadow-sm group-hover:scale-105 transition-transform' src={item.image} alt={item.title} />
+                          </NavLink>
+                          <div className="flex-1 min-w-0">
+                            <NavLink to={`/product/${productId}`}>
+                              <h3 className="font-semibold text-gray-800 hover:text-(--color-green) transition-colors truncate">{item.title}</h3>
+                            </NavLink>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {formatMoney(currency, item.price)} • Qty: {item.quantity} • {formatMoney(currency, item.lineTotal)}
+                            </p>
+                          </div>
+                        </div>
+                        {actions.canReview && (
+                          <button
+                            onClick={() => openReviewModal(orderId, productId, item.title, item.image)}
+                            disabled={reviewedOrders[reviewKey]}
+                            className={`cursor-pointer px-3 py-2 text-xs font-bold border rounded transition-all active:scale-95 self-end sm:self-auto
+                              ${reviewedOrders[reviewKey]
+                                ? 'text-gray-400 border-gray-100 cursor-not-allowed'
+                                : 'text-amber-600 border-amber-200 hover:bg-amber-500 hover:text-white'
+                              }`}>
+                            {reviewedOrders[reviewKey] ? '✓ REVIEWED' : '★ REVIEW'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
-                {/* Actions */}
-                <div className="flex justify-end gap-2 shrink-0 lg:w-50 lg:ml-auto">
-                  {item.status === 'Return Requested' && (
-                    <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded border border-orange-100 uppercase">Return Pending</span>
-                  )}
-                  {item.status === 'Returned' && (
-                    <span className="text-[10px] font-bold text-red-600 bg-red-50 px-2 py-1 rounded border border-red-100 uppercase">Returned</span>
-                  )}
-                  {(item.status === 'Order Placed' || item.status === 'Packing') && (
-                    <button onClick={() => cancelOrderHandler(item.orderId)}
-                      className="cursor-pointer px-4 py-2 text-[11px] text-red-600 font-bold border border-red-100 rounded-lg hover:bg-red-600 hover:text-white transition-all uppercase">
-                      Cancel
-                    </button>
-                  )}
-                  {item.status === 'Delivered' && (
-                    <button
-                      onClick={() => openReviewModal(item.orderId, item.productId, item.title, item.image)}
-                      disabled={reviewedOrders[`${item.orderId}_${item.productId}`]}
-                      className={`cursor-pointer px-3 py-2 text-xs font-bold border rounded transition-all active:scale-95
-                        ${reviewedOrders[`${item.orderId}_${item.productId}`]
-                          ? 'text-gray-400 border-gray-100 cursor-not-allowed'
-                          : 'text-amber-600 border-amber-200 hover:bg-amber-500 hover:text-white'
-                        }`}>
-                      {reviewedOrders[`${item.orderId}_${item.productId}`] ? '✓ REVIEWED' : '★ REVIEW'}
-                    </button>
-                  )}
-                  {item.status === 'Delivered' && (
-                    <button onClick={() => returnOrderHandler(item.orderId)}
-                      className="cursor-pointer px-4 py-2 text-[11px] text-orange-600 font-bold border border-orange-200 rounded-lg hover:bg-orange-500 hover:text-white transition-all uppercase">
-                      Return
-                    </button>
-                  )}
+                {/* Footer: totals, notes, actions */}
+                <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pt-3 border-t border-gray-100">
+                  <div className="flex flex-col gap-2">
+                    {actions.canPay && order.paymentExpiresAt && (
+                      <PayCountdown expiresAt={order.paymentExpiresAt} onExpire={fetchOrders} />
+                    )}
+                    {order.returnWindowEndsAt && (
+                      <span className="text-[11px] text-gray-500">
+                        Return window {actions.canReturn ? "ends" : "ended"} on <span className="font-semibold text-gray-700">{formatDate(order.returnWindowEndsAt)}</span>
+                      </span>
+                    )}
+                    <RefundNote order={order} currency={currency} />
+                    <div className="flex flex-wrap gap-2">
+                      {actions.canPay && (
+                        <button onClick={() => payNowHandler(order)} disabled={isBusy}
+                          className="cursor-pointer px-4 py-2 text-[11px] text-white font-bold bg-(--color-green) rounded-lg hover:bg-(--color-gold) transition-all uppercase disabled:opacity-60 disabled:cursor-not-allowed">
+                          {busyAction === 'pay' ? 'Processing…' : 'Pay now'}
+                        </button>
+                      )}
+                      {actions.canCancel && (
+                        <button onClick={() => cancelOrderHandler(orderId)} disabled={isBusy}
+                          className="cursor-pointer px-4 py-2 text-[11px] text-red-600 font-bold border border-red-100 rounded-lg hover:bg-red-600 hover:text-white transition-all uppercase disabled:opacity-60 disabled:cursor-not-allowed">
+                          {busyAction === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                        </button>
+                      )}
+                      {actions.canReturn && (
+                        <button onClick={() => returnOrderHandler(orderId)} disabled={isBusy}
+                          className="cursor-pointer px-4 py-2 text-[11px] text-orange-600 font-bold border border-orange-200 rounded-lg hover:bg-orange-500 hover:text-white transition-all uppercase disabled:opacity-60 disabled:cursor-not-allowed">
+                          {busyAction === 'return' ? 'Submitting…' : 'Return'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <PriceBreakdown pricing={order.pricing} currency={currency} />
                 </div>
               </div>
             );

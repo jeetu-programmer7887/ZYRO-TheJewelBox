@@ -1,5 +1,4 @@
 import React, { useContext, useEffect, useMemo, useRef } from 'react';
-import axios from 'axios';
 import { AiOutlineMinus, AiOutlinePlus } from 'react-icons/ai';
 import { ShopContext } from '../config/ShopContext';
 import { Link, useNavigate } from 'react-router-dom';
@@ -7,54 +6,47 @@ import { RxCross2 } from "react-icons/rx";
 import { motion, AnimatePresence } from "framer-motion";
 import { IoWarningOutline, IoRocketOutline, IoCheckmarkCircle } from "react-icons/io5";
 import { optimizeImage } from '../Utility/image';
+import useCheckoutQuote from '../Utility/useCheckoutQuote';
 
 const Cart = () => {
-  const { currency, deliveryFee, updateQuantity, cartData, cartItems, allProducts, productsLoading, cartLoading, backendUrl } = useContext(ShopContext);
+  const { currency, updateQuantity, cartLoading, user, authChecked } = useContext(ShopContext);
   const navigate = useNavigate();
-  // Only show the loader while the product list is genuinely loading
-  const loading = (productsLoading && !allProducts.length) || cartLoading;
 
-  // Drop cart entries whose product was deleted or deactivated, so the bag and
-  // the navbar badge agree. Confirm with the server first: the product list
-  // may be a few minutes stale.
-  const checkedMissing = useRef(new Set());
+  // Prices, stock limits, delivery fee and totals all come from the server
+  const { quote, loading: quoteLoading, error: quoteError, refresh } = useCheckoutQuote();
+  const loading = !authChecked || cartLoading || (user?.isLoggedIn && quoteLoading && !quote);
+
+  // Items the server reports as no longer sold are removed from the bag once
+  const removedUnavailable = useRef(new Set());
   useEffect(() => {
-    if (productsLoading || !allProducts.length) return;
-    const known = new Set(allProducts.map(p => p._id));
-    const missing = Object.keys(cartItems).filter(id =>
-      cartItems[id] > 0 && !known.has(id) && !checkedMissing.current.has(id)
-    );
-    missing.forEach(async (id) => {
-      checkedMissing.current.add(id);
-      try {
-        await axios.get(`${backendUrl}/api/products/details/${id}`);
-      } catch (error) {
-        if (error.response?.status === 404) updateQuantity(id, 0);
-      }
-    });
-  }, [cartItems, allProducts, productsLoading, backendUrl, updateQuantity]);
+    (quote?.issues || [])
+      .filter(issue => issue.type === 'unavailable' && !removedUnavailable.current.has(issue.productId))
+      .forEach(issue => {
+        removedUnavailable.current.add(issue.productId);
+        updateQuantity(issue.productId, 0);
+      });
+  }, [quote, updateQuantity]);
 
-  // --- STOCK VALIDATION LOGIC ---
   const validatedCart = useMemo(() => {
-    return cartData.map(item => {
-      const totalStock = item.variants?.reduce((acc, v) => acc + (Number(v.stock) || 0), 0) ?? 0;
+    const issuesById = new Map((quote?.issues || []).map(issue => [issue.productId, issue]));
+    return (quote?.lines || []).map(line => {
+      const issue = issuesById.get(line.productId);
       return {
-        ...item,
-        availableStock: totalStock,
-        isOutOfStock: totalStock <= 0,
-        exceedsStock: totalStock > 0 && item.quantity > totalStock,
+        ...line,
+        _id: line.productId,
+        id: line.slug || line.productId,
+        issue,
+        isOutOfStock: issue?.type === 'out_of_stock',
+        exceedsStock: issue?.type === 'insufficient_stock',
       };
     });
-  }, [cartData]);
+  }, [quote]);
 
-  const hasOutOfStockItems = useMemo(() => validatedCart.some(item => item.isOutOfStock || item.exceedsStock), [validatedCart]);
-
-  // --- SHIPPING LOGIC ---
-  const freeShippingThreshold = 500;
-  const subtotal = cartData.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-  const shipping = (subtotal > 0 && subtotal >= freeShippingThreshold) ? 0 : deliveryFee;
-  const amountToFreeShipping = freeShippingThreshold - subtotal;
-  const total = subtotal + (subtotal > 0 ? shipping : 0);
+  const hasOutOfStockItems = !quote?.canCheckout && validatedCart.length > 0;
+  const subtotal = quote?.subtotal ?? 0;
+  const shipping = quote?.deliveryFee ?? 0;
+  const amountToFreeShipping = quote?.amountToFreeDelivery ?? 0;
+  const total = quote ? quote.subtotal + quote.deliveryFee : 0;
 
   return (
     <div className="bg-(--color-green)/1 lg:pb-20 lg:pt-10 mt-20 lg:mt-20 pt-5 px-4 pb-20 md:px-10 lg:px-15">
@@ -117,7 +109,7 @@ const Cart = () => {
                     >
                       <Link to={`/product/${item.id}`} className="shrink-0 group relative">
                         <img
-                          src={optimizeImage(item.thumbnail || item.images?.[0], 400)}
+                          src={optimizeImage(item.image, 400)}
                           alt={item.title}
                           loading="lazy"
                           decoding="async"
@@ -142,13 +134,13 @@ const Cart = () => {
                               </p>
                             ) : item.exceedsStock ? (
                               <p className="text-red-600 text-xs font-bold flex items-center gap-1">
-                                <IoWarningOutline size={16} /> Only {item.availableStock} left. Please reduce the quantity.
+                                <IoWarningOutline size={16} /> {item.issue?.message || `Only ${item.maxQuantity} available. Please reduce the quantity.`}
                               </p>
-                            ) : (
+                            ) : item.material ? (
                               <p className="text-gray-500 text-[10px] md:text-[12px] lg:text-sm mb-4">
                                 <span className='border rounded-full px-2 lg:px-3 border-gray-300'>Material: {item.material}</span>
                               </p>
-                            )}
+                            ) : null}
                           </div>
                           <button onClick={() => updateQuantity(item._id, 0)} aria-label={`Remove ${item.title} from bag`} className="text-gray-500 cursor-pointer hover:text-black transition-colors p-1">
                             <RxCross2 size={22} />
@@ -159,7 +151,7 @@ const Cart = () => {
                           <div className="flex flex-col items-start gap-1">
                             <div className={`flex items-center border rounded-lg px-1 lg:px-2 py-1 ${item.isOutOfStock || item.exceedsStock ? 'border-red-200 bg-red-100/50' : 'border-gray-300'}`}>
                               <button
-                                onClick={() => updateQuantity(item._id, item.exceedsStock ? item.availableStock : item.quantity - 1)}
+                                onClick={() => updateQuantity(item._id, item.exceedsStock ? item.maxQuantity : item.quantity - 1)}
                                 disabled={item.quantity <= 1 || item.isOutOfStock}
                                 aria-label="Decrease quantity"
                                 className="p-1 lg:p-2 disabled:opacity-30">
@@ -168,7 +160,7 @@ const Cart = () => {
                               <span className="px-3 lg:px-4 font-semibold text-sm lg:text-base">{item.quantity}</span>
                               <button
                                 onClick={() => updateQuantity(item._id, item.quantity + 1)}
-                                disabled={item.isOutOfStock || item.quantity >= item.availableStock}
+                                disabled={item.isOutOfStock || item.quantity >= item.maxQuantity}
                                 aria-label="Increase quantity"
                                 className="p-1 lg:p-2 disabled:opacity-30 disabled:cursor-not-allowed">
                                 <AiOutlinePlus size={14} />
@@ -179,7 +171,7 @@ const Cart = () => {
                             )}
                           </div>
                           <div className={`text-right text-base lg:text-lg font-semibold ${item.isOutOfStock ? 'text-gray-400 line-through' : ''}`}>
-                            {currency}{item.price * item.quantity}
+                            {currency}{item.lineTotal}
                           </div>
                         </div>
                       </div>
@@ -195,7 +187,7 @@ const Cart = () => {
 
                   {/* --- DYNAMIC SHIPPING NUDGE --- */}
                   <div className="mt-4">
-                    {subtotal >= freeShippingThreshold ? (
+                    {amountToFreeShipping <= 0 ? (
                       <div className="flex items-center gap-2 text-green-700 bg-green-50 p-3 rounded-md text-xs lg:text-sm font-medium border border-green-100">
                         <IoCheckmarkCircle size={18} />
                         You've unlocked FREE SHIPPING!
@@ -236,6 +228,13 @@ const Cart = () => {
                     <span className='font-semibold text-(--color-green)'>{currency}{total}</span>
                   </div>
 
+                  {quoteError && (
+                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg mb-4 text-amber-800 text-xs flex justify-between items-center gap-2">
+                      <span>{quoteError}</span>
+                      <button type="button" onClick={refresh} className="underline font-semibold shrink-0">Retry</button>
+                    </div>
+                  )}
+
                   {/* Stock Warning */}
                   {hasOutOfStockItems && (
                     <div className="bg-red-50 border border-red-200 p-3 rounded-lg mb-4 text-red-700 text-xs">
@@ -244,8 +243,8 @@ const Cart = () => {
                   )}
 
                   <button
-                    onClick={() => !hasOutOfStockItems && navigate('/place-order')}
-                    disabled={hasOutOfStockItems}
+                    onClick={() => !hasOutOfStockItems && !quoteLoading && navigate('/place-order')}
+                    disabled={hasOutOfStockItems || quoteLoading}
                     className={`w-full py-3 my-3 rounded-lg font-bold tracking-widest transition-all duration-500 
                         ${hasOutOfStockItems
                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed border border-gray-300'
@@ -265,6 +264,11 @@ const Cart = () => {
           ) : (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-20 para">
               <h2 className="text-2xl text-gray-400">Your cart is empty</h2>
+              {!user?.isLoggedIn && (
+                <p className="text-sm text-gray-500 mt-2">
+                  <Link to="/login" state={{ from: { pathname: '/cart' } }} className="text-(--color-green) underline">Log in</Link> to see the items in your bag.
+                </p>
+              )}
               <Link to="/" className="text-(--color-green) underline mt-4 inline-block">Discover our exquisite collection</Link>
             </motion.div>
           )}

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authAdmin } from '../middleware/authAdmin.js';
 import { verifyAdmin } from '../controllers/userController.js';
 import { addProduct, editProduct, getAdminDetails, getOrders, logoutAdmin, removeProduct, updateOrderStatus,
-    getDashboardStats, exportOrdersData, contactUs
+    getDashboardStats, exportOrdersData, contactUs, retryRefund
  } from '../controllers/adminController.js';
 import upload from '../middleware/multer.js';
 
@@ -25,6 +25,7 @@ adminRouter.post('/add',
 
 adminRouter.get('/get-orders', authAdmin, getOrders);
 adminRouter.patch('/update-order', authAdmin, updateOrderStatus);
+adminRouter.post('/orders/:orderId/refund', authAdmin, retryRefund);
 adminRouter.delete('/remove/:id', authAdmin, removeProduct);
 adminRouter.put('/:id/edit', authAdmin, editProduct);
 adminRouter.post('/logout', authAdmin, logoutAdmin);

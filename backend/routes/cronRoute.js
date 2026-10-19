@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { runOrderStatusJob, runCoinExpiryJob } from '../config/updateStatus.js';
+import { reconcileAllPendingOrders } from '../services/checkout.js';
 
 const cronRouter = Router();
 
@@ -27,6 +28,15 @@ cronRouter.get('/order-status', requireCronSecret, async (req, res, next) => {
 cronRouter.get('/coin-expiry', requireCronSecret, async (req, res, next) => {
     try {
         res.json({ success: true, ...(await runCoinExpiryJob()) });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Confirms late payments / expires abandoned online orders (returns reserved coins)
+cronRouter.get('/pending-payments', requireCronSecret, async (req, res, next) => {
+    try {
+        res.json({ success: true, ...(await reconcileAllPendingOrders()) });
     } catch (error) {
         next(error);
     }

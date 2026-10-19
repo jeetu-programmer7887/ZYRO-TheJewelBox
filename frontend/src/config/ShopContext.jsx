@@ -22,9 +22,6 @@ const readJSON = (storage, key, fallback) => {
 const writeJSON = (storage, key, value) => {
   try { storage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
 };
-const getRole = () => {
-  try { return localStorage.getItem('role'); } catch { return null; }
-};
 
 const ShopContextProvider = (props) => {
   const currency = "₹";
@@ -43,41 +40,84 @@ const ShopContextProvider = (props) => {
   const [productsLoading, setProductsLoading] = useState(!cachedProducts?.items?.length);
 
   const [cartItems, setCartItems] = useState({});
-  // True until the logged-in user's cart has been fetched at least once
-  const [cartLoading, setCartLoading] = useState(() => getRole() === 'user');
+  // Bumped whenever the server confirms a cart change; server-priced views
+  // (bag, checkout) re-fetch their quote when it changes.
+  const [cartVersion, setCartVersion] = useState(0);
+  const bumpCart = () => setCartVersion(v => v + 1);
+  // True until we know whether there is a cart to load (and it has loaded)
+  const [cartLoading, setCartLoading] = useState(true);
   const [wishlist, setWishlist] = useState(() => readJSON(localStorage, 'wishlist', []));
 
-  // Authentication Check
+  // ── Session ──────────────────────────────────────────────
+  // The session lives in an httpOnly cookie, so the server is the only
+  // source of truth for who is logged in. refreshSession() re-syncs the
+  // user from /api/user/session; concurrent callers share one request.
+  const sessionRequest = useRef(null);
+  const lastSessionCheck = useRef(0);
+  const refreshSession = ({ silent = false } = {}) => {
+    if (sessionRequest.current) return sessionRequest.current;
+    sessionRequest.current = (async () => {
+      try {
+        const { data } = await axios.get(backendUrl + "/api/user/session");
+        lastSessionCheck.current = Date.now();
+        if (data.loggedIn) {
+          const next = { ...data.user, role: data.role, isLoggedIn: true };
+          // Keep the same object when nothing changed, so a background
+          // re-check never re-renders forms the customer is typing in.
+          setUser(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+          return true;
+        }
+        setUser(prev => {
+          if (prev.isLoggedIn && !silent) {
+            toast.info('Your session has ended. Please log in again.', { toastId: 'session-expired' });
+          }
+          return prev.isLoggedIn === false ? prev : { isLoggedIn: false, role: null };
+        });
+        return false;
+      } catch {
+        // Network error: keep the current state rather than logging out
+        return null;
+      } finally {
+        sessionRequest.current = null;
+      }
+    })();
+    return sessionRequest.current;
+  };
+
   useEffect(() => {
     const checkAuth = async () => {
-      const role = getRole();
-
-      // No stored role means this browser never logged in (or logged out):
-      // skip the network round trip and render as a guest immediately.
-      if (role !== 'user' && role !== 'admin') {
-        setUser({ isLoggedIn: false });
-        setAuthChecked(true);
-        return;
-      }
-
-      try {
-        const endpoint = role === 'admin' ? "/api/admin/me" : "/api/user/me";
-        const response = await axios.get(backendUrl + endpoint);
-        if (response.data.success) {
-          setUser({ ...response.data, isLoggedIn: true });
-        } else {
-          setUser({ isLoggedIn: false });
-        }
-      } catch {
-        // Session expired or revoked: forget the stale role so the next
-        // visit doesn't make the same failing request.
-        try { localStorage.removeItem('role'); } catch { /* ignore */ }
-        setUser({ isLoggedIn: false });
-      }
+      const result = await refreshSession({ silent: true });
+      if (result === null) setUser({ isLoggedIn: false, role: null }); // offline on first load
       setAuthChecked(true);
     };
     checkAuth();
   }, []);
+
+  // Re-check when the customer comes back to the tab (e.g. they logged out
+  // or reset their password in another tab), at most once a minute.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSessionCheck.current > 60 * 1000) {
+        refreshSession();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, []);
+
+  const logout = async () => {
+    try {
+      await axios.post(backendUrl + "/api/user/logout");
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
+    setUser({ isLoggedIn: false, role: null });
+    setCartItems({});
+  };
 
   // Product Data Fetching
   const getProductData = async () => {
@@ -181,8 +221,9 @@ const ShopContextProvider = (props) => {
     }
   };
 
-  // A request rejected with 401 while we think the customer is logged in
-  // means the session expired or was revoked: switch to guest mode cleanly.
+  // A 401 while we think someone is logged in doesn't always mean the
+  // session is gone (e.g. an admin hitting a customer-only endpoint), so
+  // ask the server before changing the UI.
   const isLoggedInRef = useRef(false);
   isLoggedInRef.current = !!user.isLoggedIn;
   useEffect(() => {
@@ -190,11 +231,9 @@ const ShopContextProvider = (props) => {
       (response) => response,
       (error) => {
         const url = error.config?.url || '';
-        const isAuthCall = /\/api\/(user|admin)\/(login|verify|google|register|verify-email|resend-otp|forgot-password|reset-password)/.test(url);
+        const isAuthCall = /\/api\/user\/(login|google|register|verify-email|resend-otp|forgot-password|reset-password|session)|\/api\/admin\/verify/.test(url);
         if (error.response?.status === 401 && isLoggedInRef.current && !isAuthCall) {
-          try { localStorage.removeItem('role'); } catch { /* ignore */ }
-          setUser({ isLoggedIn: false });
-          toast.info('Your session has expired. Please log in again.', { toastId: 'session-expired' });
+          refreshSession();
         }
         return Promise.reject(error);
       }
@@ -223,7 +262,9 @@ const ShopContextProvider = (props) => {
           }
         }
 
-        await Promise.all([getUserCart(), getWishlistData()]);
+        if (user.role === 'user') {
+          await Promise.all([getUserCart(), getWishlistData()]);
+        }
         setCartLoading(false);
       } else {
         setWishlist(readJSON(localStorage, 'wishlist', []));
@@ -249,6 +290,7 @@ const ShopContextProvider = (props) => {
     try {
       const { data } = await axios.post(backendUrl + '/api/cart/add', { itemId });
       if (data && data.success === false) throw new Error(data.message);
+      bumpCart();
       return true;
     } catch (error) {
       console.error("Cart Add Error:", error);
@@ -263,6 +305,7 @@ const ShopContextProvider = (props) => {
       const response = await axios.get(backendUrl + '/api/cart/get');
       if (response.data.success) {
         setCartItems(response.data.cartData || {});
+        bumpCart();
       }
     } catch (error) {
       console.error("Get Cart Error:", error);
@@ -281,6 +324,7 @@ const ShopContextProvider = (props) => {
       try {
         const { data } = await axios.patch(backendUrl + '/api/cart/update', { itemId, quantity });
         if (data && data.success === false) throw new Error(data.message);
+        bumpCart();
       } catch (error) {
         console.error("Update Quantity Error:", error);
         toast.error(error.response?.data?.message || "Couldn't update quantity", { toastId: `qty-${itemId}` });
@@ -318,13 +362,13 @@ const ShopContextProvider = (props) => {
   // Provider Value: memoized so consumers only re-render when shared state changes
   const value = useMemo(() => ({
     otp, setTotp,
-    user, setUser, authChecked, backendUrl,
+    user, setUser, authChecked, backendUrl, logout, refreshSession,
     allProducts, productsLoading, refreshProducts: getProductData, cartLoading,
     currency, deliveryFee,
-    addToCart, cartItems, setCartItems, updateQuantity, getCartCount,
+    addToCart, cartItems, setCartItems, updateQuantity, getCartCount, cartVersion, refreshCart: getUserCart,
     wishlist, addToWishlist, removeFromWishlist, getWishlistData, getWishlistCount,
     cartData, newArrivals,
-  }), [otp, user, authChecked, allProducts, productsLoading, cartLoading, cartItems, wishlist, cartData, newArrivals]);
+  }), [otp, user, authChecked, allProducts, productsLoading, cartLoading, cartItems, cartVersion, wishlist, cartData, newArrivals]);
 
   return (
     <ShopContext.Provider value={value}>{props.children}</ShopContext.Provider>

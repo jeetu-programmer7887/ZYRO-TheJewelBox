@@ -122,7 +122,6 @@ const ResetPassword = () => {
       if (res.data.success) {
         toast.success("Password updated. Please log in with your new password.");
         // Every session was signed out by the reset, including this one
-        try { localStorage.removeItem("role"); } catch { /* ignore */ }
         window.location.replace("/login");
       }
     } catch (err) {

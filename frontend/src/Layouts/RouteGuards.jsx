@@ -23,8 +23,7 @@ export const GuestRoute = () => {
   if (!authChecked) return <AuthLoading />;
 
   if (user.isLoggedIn) {
-    const role = localStorage.getItem('role');
-    return <Navigate to={getHomeForRole(role)} replace />;
+    return <Navigate to={getHomeForRole(user.role)} replace />;
   }
 
   return <Outlet />;
@@ -44,7 +43,7 @@ export const ProtectedRoute = () => {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (localStorage.getItem('role') === 'admin') {
+  if (user.role === 'admin') {
     return <Navigate to="/admin/dashboard" replace />;
   }
 
@@ -65,7 +64,7 @@ export const AdminRoute = () => {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (localStorage.getItem('role') !== 'admin') {
+  if (user.role !== 'admin') {
     return <Navigate to="/userAccount" replace />;
   }
 

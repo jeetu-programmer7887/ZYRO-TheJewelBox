@@ -4,11 +4,12 @@ import {
     loginUser, registerUser, withGoogle,
     verifyEmail, forgotPassword, verifyForgot,
     resetPassword, logoutUser, updateProfile,
-    deleteAccount, getMyProfile, resendOtp
+    deleteAccount, getMyProfile, resendOtp, getSession
 } from "../controllers/userController.js";
 const userRouter = Router();
 
 // --- Public Routes without user authentication ---
+userRouter.get('/session', getSession);
 userRouter.post('/register', registerUser);
 userRouter.post('/login', loginUser);
 userRouter.post('/google', withGoogle);

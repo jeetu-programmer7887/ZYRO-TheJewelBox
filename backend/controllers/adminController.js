@@ -6,7 +6,7 @@ import fs from "fs";
 import axios from "axios";
 import validator from "validator";
 import { v2 as cloudinary } from "cloudinary";
-import { transitionOrder, OrderTransitionError } from "../services/orderLifecycle.js";
+import { transitionOrder, OrderTransitionError, refundOrder } from "../services/orderLifecycle.js";
 import { clearAuthCookie, asEmail, asString } from "../utils/security.js";
 
 const getAdminDetails = (req, res) => {
@@ -71,7 +71,7 @@ const getOrders = async (req, res) => {
     const globalStats = await orderModel.aggregate([
       {
         // STAGE 1: Only look at active/completed orders for revenue and order counts
-        $match: { status: { $ne: "Cancelled" } },
+        $match: { status: { $nin: ["Cancelled", "Pending Payment", "Returned"] } },
       },
       {
         $group: {
@@ -141,6 +141,38 @@ const updateOrderStatus = async (req, res) => {
     }
     console.error("Error in updating order status:", error);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Retry a refund that failed at the gateway (or was never started)
+const retryRefund = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    if (!mongoose.isValidObjectId(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid order" });
+    }
+    const order = await orderModel.findById(orderId).lean();
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (order.paymentMethod !== "Razorpay" || !order.payment) {
+      return res.status(400).json({ success: false, message: "Only paid online orders can be refunded here" });
+    }
+    if (!["Cancelled", "Returned"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: "Cancel or return the order before refunding it" });
+    }
+    if (order.refundStatus === "processed" || order.refundStatus === "pending") {
+      return res.status(409).json({ success: false, message: `Refund is already ${order.refundStatus}` });
+    }
+
+    const updated = await refundOrder(orderId, "Refund retried by admin");
+    const ok = updated?.refundStatus === "processed" || updated?.refundStatus === "pending";
+    return res.status(ok ? 200 : 502).json({
+      success: ok,
+      message: ok ? "Refund initiated" : `Refund failed: ${updated?.refundError || "gateway error"}`,
+      order: updated,
+    });
+  } catch (error) {
+    console.error("Retry Refund Error:", error);
+    return res.status(500).json({ success: false, message: "Couldn't retry the refund" });
   }
 };
 
@@ -388,7 +420,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       {
@@ -426,7 +458,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       {
@@ -444,7 +476,7 @@ const getDashboardStats = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: startDate },
-          status: { $ne: "Cancelled" },
+          status: { $nin: ["Cancelled", "Pending Payment", "Returned"] },
         },
       },
       { $unwind: "$items" },
@@ -606,6 +638,7 @@ const contactUs = async (req, res) => {
 };
 
 export {
+  retryRefund,
   logoutAdmin,
   getAdminDetails,
   removeProduct,

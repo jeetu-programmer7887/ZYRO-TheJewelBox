@@ -60,7 +60,7 @@ const formatDateToDisplay = (dateStr) => {
 
 const Profile = () => {
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
-  const { user, setUser } = useContext(ShopContext);
+  const { user, setUser, logout } = useContext(ShopContext);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
     firstName: "", lastName: "", email: "", mobile: "", pincode: "", birthdate: "", gender: ""
@@ -136,9 +136,13 @@ const Profile = () => {
       const response = await axios.patch(backendUrl + "/api/user/update-profile", updateData);
 
       if (response.data.success) {
-        const fullUsername = `${formData.firstName} ${formData.lastName}`.trim();
-
-        setUser({ ...user, ...formData, username: fullUsername });
+        // Use the profile as saved by the server (normalised values)
+        if (response.data.user) {
+          setUser(prev => ({ ...prev, ...response.data.user }));
+        } else {
+          const fullUsername = `${formData.firstName} ${formData.lastName}`.trim();
+          setUser({ ...user, ...formData, username: fullUsername });
+        }
 
         toast.success(response.data.message || "Details updated successfully");
         setIsEditing(false);
@@ -164,19 +168,9 @@ const Profile = () => {
   };
 
   const handleLogout = async () => {
-    try {
-      const role = localStorage.getItem('role');
-      const endpoint = role === 'admin' ? "/api/admin/logout" : "/api/user/logout";
-      const { data } = await axios.post(backendUrl + endpoint);
-      if (data.success) {
-        localStorage.removeItem('role');
-        setUser({ firstName: "", lastName: "", isLoggedIn: false });
-        toast.success(data.message || "Logged out successfully");
-        setTimeout(() => { window.location.href = '/'; }, 1500);
-      }
-    } catch {
-      toast.error("Logout failed. Please try again.");
-    }
+    await logout();
+    toast.success("Logged out successfully");
+    navigate('/', { replace: true });
   };
 
   const handleDelete = () => {

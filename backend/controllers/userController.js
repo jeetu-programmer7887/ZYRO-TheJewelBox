@@ -1,6 +1,7 @@
 import userModel from "../models/userModel.js";
 import httpStatus from "http-status";
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import axios from "axios";
 import sendVerificationEmail from "../middleware/sendVerificationEmail.js";
 import {
@@ -19,9 +20,28 @@ const isAdminEmail = (email) =>
 const findUserByEmail = (email) =>
   userModel.findOne({ email }).collation({ locale: "en", strength: 2 });
 
+// The one shape of "the logged-in customer" sent to the frontend, used by
+// both /session and every login response, so the app has the full profile
+// right after login without another request.
+const sessionUser = (user) => ({
+  firstName: user.firstName,
+  lastName: user.lastName,
+  username: `${user.firstName} ${user.lastName}`.trim(),
+  email: user.email,
+  mobile: user.mobile,
+  pincode: user.pincode,
+  birthdate: user.birthdate,
+  gender: user.gender,
+  isGoogleAuth: !!user.isGoogleAuth,
+});
+
+const ADMIN_SESSION_USER = { username: "ADMIN PANEL", firstName: "ADMIN", lastName: "PANEL", email: process.env.ADMIN_EMAIL };
+
 const publicUser = (user) => ({
   username: `${user.firstName} ${user.lastName}`.trim(),
   email: user.email,
+  role: "user",
+  user: sessionUser(user),
 });
 
 // Issue a fresh OTP for `user`, store only its hash, and email it.
@@ -181,6 +201,8 @@ const verifyAdmin = (req, res) => {
       isVerified: true,
       message: "Admin logged in",
       email: process.env.ADMIN_EMAIL,
+      role: "admin",
+      user: { ...ADMIN_SESSION_USER, email: process.env.ADMIN_EMAIL },
     });
   } catch (error) {
     console.error("Admin Verify Error:", error);
@@ -528,6 +550,35 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// Who is signed in on this browser? The session cookie is httpOnly, so the
+// frontend asks the server instead of keeping its own copy of the role.
+const getSession = async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const guest = { success: true, loggedIn: false, role: null };
+  const token = req.cookies?.token;
+  if (!token) return res.json(guest);
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role === "admin" && decoded.sub === "admin") {
+      return res.json({
+        success: true, loggedIn: true, role: "admin",
+        user: { ...ADMIN_SESSION_USER, email: process.env.ADMIN_EMAIL },
+      });
+    }
+    if (decoded.role === "user" && decoded.id) {
+      const user = await userModel.findById(decoded.id)
+        .select("firstName lastName email mobile pincode birthdate gender isGoogleAuth tokenVersion").lean();
+      if (user && (user.tokenVersion || 0) === (decoded.tv || 0)) {
+        return res.json({ success: true, loggedIn: true, role: "user", user: sessionUser(user) });
+      }
+    }
+  } catch { /* expired or invalid token: treat as guest */ }
+
+  clearAuthCookie(res);
+  return res.json(guest);
+};
+
 //For getting profile data
 const getMyProfile = async (req, res) => {
   const user = req.user;
@@ -583,7 +634,7 @@ const updateProfile = async (req, res) => {
       return res.status(httpStatus.NOT_FOUND).json({ success: false, message: "Account not found." });
     }
 
-    return res.status(httpStatus.OK).json({ success: true, message: "Profile updated successfully." });
+    return res.status(httpStatus.OK).json({ success: true, message: "Profile updated successfully.", user: sessionUser(updatedUser) });
   } catch (error) {
     console.error("Profile Update Error:", error);
     return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ success: false, message: "An error occurred while updating the profile." });
@@ -613,7 +664,7 @@ const logoutUser = (req, res) => {
 };
 
 export {
-  loginUser, registerUser, verifyEmail, resendOtp, verifyAdmin,
+  loginUser, registerUser, verifyEmail, resendOtp, verifyAdmin, getSession,
   withGoogle, getMyProfile, updateProfile, deleteAccount,
   forgotPassword, verifyForgot, resetPassword,
   logoutUser,

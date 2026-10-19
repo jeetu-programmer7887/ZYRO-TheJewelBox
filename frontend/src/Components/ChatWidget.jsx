@@ -47,7 +47,7 @@ const ChatWidget = ({ backendUrl }) => {
         }));
 
         try {
-            if (user.isLoggedIn && localStorage.getItem('role') !== 'admin') {
+            if (user.isLoggedIn && user.role === 'user') {
                 const { data } = await axios.post(`${backendUrl}/api/support/chat-login`, {
                     message: currentInput,
                     history: formattedHistory

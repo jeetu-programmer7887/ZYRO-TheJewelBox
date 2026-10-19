@@ -105,6 +105,15 @@ const startCronJobs = async () => {
         }
     });
 
+    cron.schedule('*/15 * * * *', async () => {
+        try {
+            const { reconcileAllPendingOrders } = await import('../services/checkout.js');
+            console.log('Pending payments job:', await reconcileAllPendingOrders());
+        } catch (error) {
+            console.error('Pending Payments Cron Error:', error.message);
+        }
+    });
+
     cron.schedule('0 0 * * *', async () => {
         try {
             console.log('Coin expiry job:', await runCoinExpiryJob());

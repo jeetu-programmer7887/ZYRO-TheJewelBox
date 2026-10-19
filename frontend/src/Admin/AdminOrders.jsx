@@ -2,13 +2,15 @@ import axios from 'axios';
 import React, { useState, useContext, useEffect, useRef, useCallback } from 'react';
 import { ShopContext } from '../config/ShopContext';
 import { toast } from 'react-toastify';
+import Swal from 'sweetalert2';
 import { exportToCSV } from '../Utility/exportCSV';
-import { Download, Package, Search, Filter, Truck, MapPin, CreditCard, AlertCircle, TrendingUp, Clock, Copy, Loader2 } from 'lucide-react';
+import { Download, Package, Search, Filter, Truck, MapPin, CreditCard, AlertCircle, TrendingUp, Clock, Copy, Loader2, RotateCcw } from 'lucide-react';
 
 const LIMIT = 10;
 
 //Added 2 entries
 const STATUS_CONFIG = {
+  "Pending Payment": { label: "Awaiting Payment", text: "text-slate-600", bg: "bg-slate-50", border: "border-slate-200", strip: "bg-slate-300" },
   "Order Placed": { label: "Order Placed", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", strip: "bg-blue-400" },
   "Packing": { label: "Packing", text: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200", strip: "bg-amber-400" },
   "Shipped": { label: "Shipped", text: "text-purple-700", bg: "bg-purple-50", border: "border-purple-200", strip: "bg-purple-400" },
@@ -19,6 +21,48 @@ const STATUS_CONFIG = {
   "Returned": { label: "Returned", text: "text-rose-700", bg: "bg-rose-50", border: "border-rose-200", strip: "bg-rose-400" }, // 
 };
 
+// Set automatically by the system, never chosen by an admin
+const SYSTEM_STATUSES = ["Pending Payment", "Return Requested"];
+
+const PAYMENT_STATUS_LABEL = {
+  cod_pending: "COD · unpaid",
+  cod_collected: "COD · collected",
+  created: "Awaiting payment",
+  failed: "Payment failed",
+  captured: "Paid online",
+  expired: "Payment expired",
+  refunded: "Refunded",
+};
+
+const REFUND_STYLE = {
+  pending: "bg-sky-50 text-sky-700",
+  processed: "bg-emerald-50 text-emerald-700",
+  failed: "bg-red-50 text-red-700",
+  manual: "bg-amber-50 text-amber-700",
+};
+
+const paymentStatusOf = (order) =>
+  order.paymentStatus || (order.paymentMethod === "COD"
+    ? (order.payment ? "cod_collected" : "cod_pending")
+    : (order.payment ? "captured" : "created"));
+
+const paymentBadgeStyle = (ps) => {
+  if (["captured", "cod_collected", "refunded"].includes(ps)) return { pill: "bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" };
+  if (["failed", "expired"].includes(ps)) return { pill: "bg-red-50 text-red-700", dot: "bg-red-500" };
+  return { pill: "bg-amber-50 text-amber-700", dot: "bg-amber-500" };
+};
+
+// Display hint only; the server validates every refund attempt
+const canRetryRefund = (order) =>
+  order.paymentMethod === "Razorpay" && order.payment &&
+  ["Cancelled", "Returned"].includes(order.status) &&
+  ["failed", "none", undefined, null].includes(order.refundStatus);
+
+const copyText = (text, label) => {
+  navigator.clipboard.writeText(text);
+  toast.info(`${label} copied!`);
+};
+
 const AdminOrders = () => {
   const [orders, setOrders] = useState([]);
   const [page, setPage] = useState(1);
@@ -27,6 +71,8 @@ const AdminOrders = () => {
   const [statusFilter, setStatusFilter] = useState("All");
   const [paymentFilter, setPaymentFilter] = useState("All");
   const [searchId, setSearchId] = useState("");
+  const [busy, setBusy] = useState({}); // { [orderId]: true } while a request is in flight
+  const busyRef = useRef(new Set());
   const [summaryStats, setSummaryStats] = useState({
     totalOrders: 0, totalRevenue: 0, pendingCount: 0, deliveredCount: 0
   });
@@ -58,7 +104,7 @@ const AdminOrders = () => {
         }
       }
     } catch (error) {
-      toast.error("Failed to load orders");
+      toast.error(error.response?.data?.message || "Failed to load orders");
     } finally {
       setLoading(false);
     }
@@ -103,24 +149,63 @@ const AdminOrders = () => {
     }
   };
 
-  const statusHandler = async (event, orderId, currentStatus) => {
-    //  Block if already Returned
-    if (currentStatus === 'Returned') {
-      toast.error("Returned orders cannot be modified");
-      return;
-    }
+  // Merge the server's copy of an order into the list (keeps populated userId)
+  const mergeOrder = (updated) => {
+    if (!updated?._id) return;
+    const id = String(updated._id);
+    setOrders((prev) => prev.map((o) => (String(o._id) === id ? { ...o, ...updated, _id: o._id, userId: o.userId } : o)));
+  };
 
-    const newStatus = event.target.value;
+  const runForOrder = async (orderId, request) => {
+    if (busyRef.current.has(orderId)) return;
+    busyRef.current.add(orderId);
+    setBusy((prev) => ({ ...prev, [orderId]: true }));
     try {
-      const response = await axios.patch(`${backendUrl}/api/admin/update-order`, { orderId, status: newStatus });
-      if (response.data.success) {
-        setOrders((prev) => prev.map((o) => (o._id === orderId ? { ...o, status: newStatus } : o)));
-        toast.success("Status Updated Successfully");
-      }
+      const { data } = await request();
+      if (data.order) mergeOrder(data.order);
+      if (data.success) toast.success(data.message || "Updated");
+      else toast.error(data.message || "Request failed");
     } catch (error) {
-      toast.error(error.response?.data?.message || "Error updating status");
+      if (error.response?.data?.order) mergeOrder(error.response.data.order);
+      toast.error(error.response?.data?.message || "Request failed");
+    } finally {
+      busyRef.current.delete(orderId);
+      setBusy((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
     }
   };
+
+  // The server decides which transitions are allowed and explains rejections
+  const updateStatus = (orderId, status) =>
+    runForOrder(orderId, () => axios.patch(`${backendUrl}/api/admin/update-order`, { orderId, status }));
+
+  const statusHandler = (event, orderId) => {
+    const newStatus = event.target.value;
+    if (!newStatus || SYSTEM_STATUSES.includes(newStatus)) return;
+    updateStatus(orderId, newStatus);
+  };
+
+  const reviewReturn = async (order, approve) => {
+    const result = await Swal.fire({
+      title: approve ? "Approve this return?" : "Reject this return?",
+      text: approve
+        ? "The order will be marked Returned. Stock, coins and any online refund are handled by the server."
+        : "The order goes back to Delivered.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonColor: "#2e4a3e",
+      cancelButtonColor: "#d33",
+      confirmButtonText: approve ? "Approve return" : "Reject return",
+      scrollbarPadding: false,
+    });
+    if (result.isConfirmed) updateStatus(order._id, approve ? "Returned" : "Delivered");
+  };
+
+  const retryRefund = (orderId) =>
+    runForOrder(orderId, () => axios.post(`${backendUrl}/api/admin/orders/${orderId}/refund`));
 
   const filteredOrders = orders.filter((order) => {
     const matchesStatus = statusFilter === "All" || order.status === statusFilter;
@@ -212,6 +297,10 @@ const AdminOrders = () => {
           ) : filteredOrders.length > 0 ? (
             filteredOrders.map((order) => {
               const s = STATUS_CONFIG[order.status] || STATUS_CONFIG["Order Placed"];
+              const isBusy = !!busy[order._id];
+              const ps = paymentStatusOf(order);
+              const pb = paymentBadgeStyle(ps);
+              const awaitingPayment = order.status === "Pending Payment";
               return (
                 <div key={order._id} className="bg-white border border-[#e9e9e9] rounded-2xl overflow-hidden hover:shadow-lg hover:border-[#c6a664]/40 transition-all duration-200">
                   <div className={`h-0.75 w-full ${s.strip} opacity-75`} />
@@ -225,6 +314,29 @@ const AdminOrders = () => {
                           Reason: <span className="font-semibold">{order.returnReason}</span>
                         </p>
                       )}
+                      <div className="ml-auto flex gap-2">
+                        <button onClick={() => reviewReturn(order, true)} disabled={isBusy}
+                          className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg bg-[#2e4a3e] text-[#c6a664] hover:bg-[#1a2e27] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                          Approve
+                        </button>
+                        <button onClick={() => reviewReturn(order, false)} disabled={isBusy}
+                          className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg border border-orange-300 text-orange-700 hover:bg-orange-100 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {awaitingPayment && (
+                    <div className="flex items-center gap-2 px-5 py-2.5 bg-slate-50 border-b border-slate-200">
+                      <Clock size={13} className="text-slate-500" />
+                      <p className="text-xs font-bold text-slate-600 uppercase tracking-widest">Awaiting payment</p>
+                      <p className="text-xs text-slate-500 ml-2">Online payment not completed yet. Nothing to fulfil.</p>
+                    </div>
+                  )}
+                  {order.status === 'Cancelled' && order.cancelReason && (
+                    <div className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border-b border-red-200">
+                      <p className="text-xs font-bold text-red-700 uppercase tracking-widest">Cancelled</p>
+                      <p className="text-xs text-red-500 ml-2">Reason: <span className="font-semibold">{order.cancelReason}</span></p>
                     </div>
                   )}
                   <div className="p-5">
@@ -286,41 +398,59 @@ const AdminOrders = () => {
                             <p className="text-[10px] font-semibold text-[#7e8180] uppercase tracking-widest">Amount</p>
                             <p className="text-xl font-black text-[#2e4a3e]">{currency}{order.amount.toLocaleString('en-IN')}</p>
                           </div>
-                          <div className="lg:mt-1">
-                            <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${order.payment ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${order.payment ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                              {order.payment ? "Paid" : "Unpaid"}
+                          <div className="lg:mt-1 flex flex-col items-end lg:items-start gap-1.5">
+                            <p className="text-[10px] text-[#7e8180] font-semibold uppercase tracking-wider">{order.paymentMethod}</p>
+                            <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${pb.pill}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${pb.dot}`} />
+                              {PAYMENT_STATUS_LABEL[ps] || ps}
                             </span>
-                            <p className="text-[10px] text-[#7e8180] mt-1 font-medium">{order.paymentMethod}</p>
+                            {order.refundStatus && order.refundStatus !== 'none' && (
+                              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${REFUND_STYLE[order.refundStatus] || 'bg-slate-50 text-slate-600'}`}>
+                                Refund · {order.refundStatus}
+                              </span>
+                            )}
+                            {order.razorpayPaymentId && (
+                              <button onClick={() => copyText(order.razorpayPaymentId, "Payment ID")} title="Copy Razorpay payment ID"
+                                className="flex items-center gap-1 font-mono text-[9px] text-[#7e8180] hover:text-[#2e4a3e] cursor-pointer break-all text-left">
+                                {order.razorpayPaymentId} <Copy size={9} className="shrink-0" />
+                              </button>
+                            )}
                           </div>
                         </div>
+                        {(order.refundError || canRetryRefund(order)) && (
+                          <div className="flex flex-col gap-2">
+                            {order.refundError && (
+                              <p className="text-[10px] text-red-600 bg-red-50 border border-red-100 rounded-lg px-2 py-1.5 leading-snug">
+                                Refund error: {order.refundError}
+                              </p>
+                            )}
+                            {canRetryRefund(order) && (
+                              <button onClick={() => retryRefund(order._id)} disabled={isBusy}
+                                className="flex items-center justify-center gap-1.5 w-full text-[10px] font-bold uppercase tracking-wider px-3 py-2 rounded-xl bg-[#2e4a3e] text-[#c6a664] hover:bg-[#1a2e27] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                                {isBusy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} Retry refund
+                              </button>
+                            )}
+                          </div>
+                        )}
                         <div className="w-full pt-2 border-t border-[#f0f0f0] lg:border-none lg:pt-0">
                           <p className="text-[10px] font-semibold text-[#7e8180] uppercase tracking-widest mb-2">Update Status</p>
 
                           <div className="relative">
                             <select
-                              onChange={(e) => statusHandler(e, order._id, order.status)}
-                              value={order.status === 'Returned' ? '' : order.status}
-                              disabled={order.status === 'Returned'}
-                              className={`appearance-none w-full text-xs font-bold px-3 py-2.5 pr-8 rounded-xl border outline-none transition-all
-      ${order.status === 'Returned'
-                                  ? 'bg-rose-50 text-rose-400 border-rose-200 cursor-not-allowed opacity-70'
-                                  : `cursor-pointer ${s.bg} ${s.text} ${s.border}`
-                                }`}
+                              onChange={(e) => statusHandler(e, order._id)}
+                              value={order.status}
+                              disabled={awaitingPayment || isBusy}
+                              className={`appearance-none w-full text-xs font-bold px-3 py-2.5 pr-8 rounded-xl border outline-none transition-all ${s.bg} ${s.text} ${s.border}
+                                ${awaitingPayment || isBusy ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
                             >
-                              {order.status === 'Returned' && (
-                                <option value="" disabled>Return Approved — Locked</option>
+                              {/* System-set statuses are shown but can't be chosen */}
+                              {SYSTEM_STATUSES.includes(order.status) && (
+                                <option value={order.status} disabled>{STATUS_CONFIG[order.status].label}</option>
                               )}
                               {Object.entries(STATUS_CONFIG)
-                                .filter(([k]) => k !== 'Return Requested')
+                                .filter(([k]) => !SYSTEM_STATUSES.includes(k))
                                 .map(([k, v]) => (
-                                  <option
-                                    key={k}
-                                    value={k}
-                                    disabled={k === 'Returned' && order.status !== 'Return Requested'} // 
-                                  >
-                                    {v.label}{k === 'Returned' && order.status !== 'Return Requested' ? ' (awaiting request)' : ''}
-                                  </option>
+                                  <option key={k} value={k}>{v.label}</option>
                                 ))
                               }
                             </select>

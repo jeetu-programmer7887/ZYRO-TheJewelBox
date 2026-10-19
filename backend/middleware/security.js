@@ -15,8 +15,12 @@ export const allowedOrigins = () =>
 // DELETE, so state-changing requests from other sites are rejected here.
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+// Server-to-server endpoints authenticated by their own signature
+const SIGNED_WEBHOOKS = new Set(['/order/razorpay-webhook']);
+
 export const originCheck = (req, res, next) => {
     if (SAFE_METHODS.has(req.method)) return next();
+    if (SIGNED_WEBHOOKS.has(req.path)) return next();
 
     const origin = req.headers.origin;
     if (!origin) {

@@ -1,20 +1,18 @@
 import { useContext, useState, useEffect } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ShopContext } from "../config/ShopContext";
-import axios from "axios";
 import Tooltip from "./Tooltip";
 import { toast } from "react-toastify";
 
 const Navbar = () => {
-  const { backendUrl, user, setUser, setCartItems, getCartCount, getWishlistCount } = useContext(ShopContext);
+  const { user, logout, getCartCount, getWishlistCount } = useContext(ShopContext);
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
   const getUsername = user?.username || fullName || user?.email || "My Account";
-  let role = null;
-  try { role = localStorage.getItem('role'); } catch { /* storage unavailable */ }
+  const role = user?.role || null;
 
   const nonTransRoutes = [
     "/login",
@@ -53,32 +51,9 @@ const Navbar = () => {
   ];
 
   const handleLogout = async () => {
-    try {
-      // 1. Determine the endpoint based on the role
-      let role = null;
-      try { role = localStorage.getItem('role'); } catch { /* storage unavailable */ }
-      const endpoint = role === 'admin' ? "/api/admin/logout" : "/api/user/logout";
-
-      // 2. Make the call
-      const { data } = await axios.post(backendUrl + endpoint);
-
-      if (data.success) {
-        try { localStorage.removeItem('role'); } catch { /* storage unavailable */ }
-
-        setUser({
-          firstName: "",
-          lastName: "",
-          isLoggedIn: false,
-        });
-        setCartItems({});
-
-        toast.success(data.message || "Logged out successfully");
-        navigate('/');
-      }
-    } catch (err) {
-      toast.error("Logout failed. Please try again.");
-      console.error("Logout error:", err);
-    }
+    await logout();
+    toast.success("Logged out successfully");
+    navigate('/');
   };
 
   useEffect(() => {

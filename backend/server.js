@@ -53,6 +53,9 @@ app.use(cors({
 
 // Middlewares
 app.use(cookieParser(process.env.COOKIE_SECRET || process.env.JWT_SECRET));
+// Razorpay webhooks are verified against the exact raw bytes, so this route
+// must get the unparsed body (registered before the JSON parser).
+app.use('/api/order/razorpay-webhook', express.raw({ type: '*/*', limit: '1mb' }));
 // Product photos for the AI stylist are sent as base64 and need a larger limit
 app.use('/api/products/analyze', express.json({ limit: '4mb' }));
 app.use(express.json({ limit: '200kb' }));
